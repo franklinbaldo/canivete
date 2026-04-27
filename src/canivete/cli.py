@@ -12,14 +12,14 @@ from canivete.ui import show_overview
 
 app = typer.Typer(
     name="canivete",
-    help="🔧 canivete — swiss-army CLI for AI agents on Telegram.",
+    help="🇨🇭🔪 canivete — swiss-army CLI for AI agents on Telegram.",
     no_args_is_help=False,
     rich_markup_mode="rich",
     add_completion=False,
 )
 
 
-app.add_typer(tg_app,   name="tg")
+app.add_typer(tg_app, name="tg")
 app.add_typer(cron_app, name="cron")
 
 
@@ -33,9 +33,13 @@ def _version_callback(value: bool) -> None:
 def root(
     ctx: typer.Context,
     version: bool = typer.Option(
-        False, "--version", "-V",
-        callback=_version_callback, is_eager=True,
-        help="Show version and exit."),
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
 ) -> None:
     """When called without a subcommand, render the overview tree banner."""
     if ctx.invoked_subcommand is None:

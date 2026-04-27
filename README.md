@@ -1,4 +1,4 @@
-# 🔧 canivete
+# 🇨🇭🔪 canivete
 
 > **Swiss-army CLI for AI agents on Telegram.**
 > One command, many blades — the toolkit your bot uses to talk back.
@@ -14,6 +14,14 @@ agents (Ireneo, Aparicio, Claudio) that share the same toolkit despite
 running on different model backends (Gemini CLI, Claude Code).
 
 ## Quickstart
+
+With [`uv`](https://docs.astral.sh/uv/) (recommended):
+
+```bash
+uv pip install 'canivete @ git+https://github.com/franklinbaldo/canivete@main'
+```
+
+Or with plain pip:
 
 ```bash
 pip install 'canivete @ git+https://github.com/franklinbaldo/canivete@main'
@@ -89,6 +97,20 @@ language model reading `--help`.
 
 Alpha. API and command names may shift before `1.0`. Pin to a tag if
 you depend on it in production.
+
+## Development
+
+```bash
+git clone https://github.com/franklinbaldo/canivete && cd canivete
+uv pip install -e ".[dev]"
+ruff format .
+ruff check .
+pytest                          # runs pytest-bdd scenarios
+```
+
+Tests are written in **BDD** style (Gherkin features in `tests/features/`,
+step definitions in `tests/step_defs/`). New behaviour starts with a
+scenario; the step definitions follow.
 
 ## License
 

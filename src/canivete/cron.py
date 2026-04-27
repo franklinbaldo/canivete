@@ -35,18 +35,16 @@ LOG = Path(os.environ.get("CRON_LOG", "/workspace/.cron.jsonl"))
 
 # ─── Time helpers ────────────────────────────────────────────────────
 
+
 def _now_iso() -> str:
-    return dt.datetime.now(dt.timezone.utc).astimezone().isoformat(
-        timespec="seconds")
+    return dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 def _parse_in(spec: str) -> dt.datetime:
     """Parse a relative duration like '30m', '2h', '1d', '90s'."""
     m = re.fullmatch(r"(\d+)\s*([smhd])", spec.strip().lower())
     if not m:
-        raise typer.BadParameter(
-            f"--in: invalid format {spec!r}. "
-            "Use '30m', '2h', '1d', or '90s'.")
+        raise typer.BadParameter(f"--in: invalid format {spec!r}. Use '30m', '2h', '1d', or '90s'.")
     n, unit = int(m.group(1)), m.group(2)
     delta = {
         "s": dt.timedelta(seconds=n),
@@ -69,6 +67,7 @@ def _parse_at(spec: str) -> dt.datetime:
 
 
 # ─── Storage ─────────────────────────────────────────────────────────
+
 
 def _append(event: dict) -> None:
     LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -102,32 +101,30 @@ def _replay() -> dict:
 
 # ─── Commands ────────────────────────────────────────────────────────
 
+
 @app.command("add", help="Schedule a job. Use --at OR --in (one of them).")
 def cron_add(
-    prompt: str = typer.Argument(
-        ..., help="Prompt that will be delivered when the job fires."),
+    prompt: str = typer.Argument(..., help="Prompt that will be delivered when the job fires."),
     at: str | None = typer.Option(
-        None, "--at",
-        help="Absolute time, ISO 8601 (e.g. 2026-04-27T09:00:00-03:00)."),
-    in_: str | None = typer.Option(
-        None, "--in",
-        help="Relative duration (e.g. 30m, 2h, 1d, 90s)."),
+        None, "--at", help="Absolute time, ISO 8601 (e.g. 2026-04-27T09:00:00-03:00)."
+    ),
+    in_: str | None = typer.Option(None, "--in", help="Relative duration (e.g. 30m, 2h, 1d, 90s)."),
 ):
     if (at and in_) or not (at or in_):
         err_console.print("[red]Use --at OR --in (exactly one).[/]")
         raise typer.Exit(2)
     when = _parse_at(at) if at else _parse_in(in_)
     jid = "j_" + uuid.uuid4().hex[:8]
-    _append({
-        "action": "add",
-        "id": jid,
-        "at": when.isoformat(timespec="seconds"),
-        "prompt": prompt,
-        "created": _now_iso(),
-    })
-    console.print(
-        f"[green]✓[/] [yellow]{jid}[/] → "
-        f"[cyan]{when.isoformat(timespec='seconds')}[/]")
+    _append(
+        {
+            "action": "add",
+            "id": jid,
+            "at": when.isoformat(timespec="seconds"),
+            "prompt": prompt,
+            "created": _now_iso(),
+        }
+    )
+    console.print(f"[green]✓[/] [yellow]{jid}[/] → [cyan]{when.isoformat(timespec='seconds')}[/]")
 
 
 @app.command("list", help="List pending jobs.")
@@ -135,12 +132,12 @@ def cron_list():
     state = _replay()
     pending = sorted(
         (j for j in state.values() if not j["fired"] and not j["removed"]),
-        key=lambda j: j.get("at") or "")
+        key=lambda j: j.get("at") or "",
+    )
     if not pending:
         console.print("[dim](no pending jobs)[/]")
         raise typer.Exit(0)
-    table = Table(show_header=True, header_style="bold yellow",
-                  border_style="dim")
+    table = Table(show_header=True, header_style="bold yellow", border_style="dim")
     table.add_column("ID", style="yellow", no_wrap=True)
     table.add_column("WHEN", style="cyan", no_wrap=True)
     table.add_column("PROMPT")
@@ -154,8 +151,7 @@ def cron_list():
 
 @app.command("rm", help="Cancel a pending job.")
 def cron_rm(
-    job_id: str = typer.Argument(
-        ..., help="Job ID (see `canivete cron list`)."),
+    job_id: str = typer.Argument(..., help="Job ID (see `canivete cron list`)."),
 ):
     state = _replay()
     if job_id not in state:

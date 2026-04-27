@@ -30,6 +30,7 @@ app = typer.Typer(
 
 # ─── Config ──────────────────────────────────────────────────────────
 
+
 def _token() -> str:
     t = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not t:
@@ -48,8 +49,8 @@ def _default_chat() -> str:
     first = next((x for x in allowed.split(",") if x.strip()), None)
     if not first:
         err_console.print(
-            "[red]No CRON_CHAT_ID or TELEGRAM_ALLOWED_USERS set; "
-            "pass --chat-id explicitly.[/]")
+            "[red]No CRON_CHAT_ID or TELEGRAM_ALLOWED_USERS set; pass --chat-id explicitly.[/]"
+        )
         raise typer.Exit(1)
     return first
 
@@ -60,12 +61,13 @@ def _api_url(method: str) -> str:
 
 # ─── HTTP plumbing ───────────────────────────────────────────────────
 
+
 def _post_form(url: str, fields: dict) -> dict:
     payload = {k: v for k, v in fields.items() if v is not None}
     data = urllib.parse.urlencode(payload).encode()
     req = urllib.request.Request(
-        url, data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"})
+        url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
     with urllib.request.urlopen(req, timeout=60) as resp:
         return json.loads(resp.read())
 
@@ -77,8 +79,8 @@ def _post_multipart(url: str, fields: dict, files: dict) -> dict:
         if v is None:
             continue
         body += (
-            f"--{boundary}\r\nContent-Disposition: form-data; "
-            f"name=\"{k}\"\r\n\r\n{v}\r\n").encode()
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'
+        ).encode()
     for k, path in files.items():
         fname = os.path.basename(path)
         mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
@@ -86,14 +88,15 @@ def _post_multipart(url: str, fields: dict, files: dict) -> dict:
             content = f.read()
         body += (
             f"--{boundary}\r\nContent-Disposition: form-data; "
-            f"name=\"{k}\"; filename=\"{fname}\"\r\n"
-            f"Content-Type: {mime}\r\n\r\n").encode()
+            f'name="{k}"; filename="{fname}"\r\n'
+            f"Content-Type: {mime}\r\n\r\n"
+        ).encode()
         body += content
         body += b"\r\n"
     body += f"--{boundary}--\r\n".encode()
     req = urllib.request.Request(
-        url, data=bytes(body),
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        url, data=bytes(body), headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    )
     with urllib.request.urlopen(req, timeout=300) as resp:
         return json.loads(resp.read())
 
@@ -101,11 +104,9 @@ def _post_multipart(url: str, fields: dict, files: dict) -> dict:
 def _send(method: str, fields: dict, files: dict | None = None) -> None:
     url = _api_url(method)
     try:
-        result = (_post_multipart(url, fields, files)
-                  if files else _post_form(url, fields))
+        result = _post_multipart(url, fields, files) if files else _post_form(url, fields)
     except urllib.error.HTTPError as e:
-        err_console.print(
-            f"[red]HTTP {e.code}:[/] {e.read().decode(errors='replace')}")
+        err_console.print(f"[red]HTTP {e.code}:[/] {e.read().decode(errors='replace')}")
         raise typer.Exit(1) from e
     except (urllib.error.URLError, OSError) as e:
         err_console.print(f"[red]Network error:[/] {e}")
@@ -119,69 +120,85 @@ def _send(method: str, fields: dict, files: dict | None = None) -> None:
 
 # ─── Commands ────────────────────────────────────────────────────────
 
+
 @app.command("text", help="Send plain text.")
 def send_text(
     text: str = typer.Argument(..., help="Message text."),
     chat_id: str | None = typer.Option(
-        None, "--chat-id", help="Destination. Default: CRON_CHAT_ID."),
-    reply_to: int | None = typer.Option(
-        None, "--reply-to", help="message_id to reply to."),
+        None, "--chat-id", help="Destination. Default: CRON_CHAT_ID."
+    ),
+    reply_to: int | None = typer.Option(None, "--reply-to", help="message_id to reply to."),
 ):
-    _send("sendMessage", {
-        "chat_id": chat_id or _default_chat(),
-        "text": text,
-        "reply_to_message_id": reply_to,
-    })
+    _send(
+        "sendMessage",
+        {
+            "chat_id": chat_id or _default_chat(),
+            "text": text,
+            "reply_to_message_id": reply_to,
+        },
+    )
 
 
 def _make_captioned(method: str, file_param: str):
     """Factory for media commands that accept --caption (photo, document,
     video, audio)."""
+
     def cmd(
         path: Path = typer.Argument(
-            ..., exists=True, file_okay=True, dir_okay=False,
-            readable=True, resolve_path=True,
-            help="Path to local file."),
-        caption: str | None = typer.Option(
-            None, "--caption", help="Caption text (optional)."),
+            ...,
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+            help="Path to local file.",
+        ),
+        caption: str | None = typer.Option(None, "--caption", help="Caption text (optional)."),
         chat_id: str | None = typer.Option(
-            None, "--chat-id", help="Destination. Default: CRON_CHAT_ID."),
-        reply_to: int | None = typer.Option(
-            None, "--reply-to", help="message_id to reply to."),
+            None, "--chat-id", help="Destination. Default: CRON_CHAT_ID."
+        ),
+        reply_to: int | None = typer.Option(None, "--reply-to", help="message_id to reply to."),
     ):
-        fields = {"chat_id": chat_id or _default_chat(),
-                  "reply_to_message_id": reply_to}
+        fields = {"chat_id": chat_id or _default_chat(), "reply_to_message_id": reply_to}
         if caption:
             fields["caption"] = caption
         _send(method, fields, files={file_param: str(path)})
+
     return cmd
 
 
 def _make_uncaptioned(method: str, file_param: str):
     """Factory for media commands without caption support (voice)."""
+
     def cmd(
         path: Path = typer.Argument(
-            ..., exists=True, file_okay=True, dir_okay=False,
-            readable=True, resolve_path=True,
-            help="Path to local file."),
+            ...,
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+            help="Path to local file.",
+        ),
         chat_id: str | None = typer.Option(
-            None, "--chat-id", help="Destination. Default: CRON_CHAT_ID."),
-        reply_to: int | None = typer.Option(
-            None, "--reply-to", help="message_id to reply to."),
+            None, "--chat-id", help="Destination. Default: CRON_CHAT_ID."
+        ),
+        reply_to: int | None = typer.Option(None, "--reply-to", help="message_id to reply to."),
     ):
-        fields = {"chat_id": chat_id or _default_chat(),
-                  "reply_to_message_id": reply_to}
+        fields = {"chat_id": chat_id or _default_chat(), "reply_to_message_id": reply_to}
         _send(method, fields, files={file_param: str(path)})
+
     return cmd
 
 
-app.command("photo",    help="Send an image (jpg/png/webp).")(
-    _make_captioned("sendPhoto",    "photo"))
+app.command("photo", help="Send an image (jpg/png/webp).")(_make_captioned("sendPhoto", "photo"))
 app.command("document", help="Send any file (pdf, zip, txt, …).")(
-    _make_captioned("sendDocument", "document"))
-app.command("voice",    help="Send a voice note (.ogg/opus, no caption).")(
-    _make_uncaptioned("sendVoice",  "voice"))
-app.command("video",    help="Send a video (.mp4).")(
-    _make_captioned("sendVideo",    "video"))
-app.command("audio",    help="Send an audio file (.mp3/.m4a/…) — not voice.")(
-    _make_captioned("sendAudio",    "audio"))
+    _make_captioned("sendDocument", "document")
+)
+app.command("voice", help="Send a voice note (.ogg/opus, no caption).")(
+    _make_uncaptioned("sendVoice", "voice")
+)
+app.command("video", help="Send a video (.mp4).")(_make_captioned("sendVideo", "video"))
+app.command("audio", help="Send an audio file (.mp3/.m4a/…) — not voice.")(
+    _make_captioned("sendAudio", "audio")
+)

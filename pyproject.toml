@@ -29,7 +29,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7",
-    "ruff>=0.4",
+    "pytest-bdd>=7",
+    "ruff>=0.6",
 ]
 
 [project.urls]
@@ -42,16 +43,66 @@ canivete = "canivete.cli:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# ── ruff ─────────────────────────────────────────────────────────────
+# Single source of truth for both formatter and linter. We enable the
+# whole rule namespace with `ALL`, then opt out of:
+#   1. rules that conflict with `ruff format` (per Astral docs);
+#   2. broad rule families that are too opinionated for a small CLI;
+#   3. specific rules that fight idiomatic Typer code.
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+select = ["ALL"]
 ignore = [
-    "E501",  # line length: handled by formatter
-    "B008",  # function calls in argument defaults: Typer's idiom
+    # ─── conflicts with `ruff format` (per docs) ─────────────────────
+    "COM812", "COM819",
+    "D206", "D300",
+    "E111", "E114", "E117",
+    "ISC001", "ISC002",
+    "Q000", "Q001", "Q002", "Q003",
+    "W191",
+    "E501",          # line length: formatter handles
+
+    # ─── Typer / Rich idioms we depend on ────────────────────────────
+    "B008",          # function calls in arg defaults — Typer pattern
+    "FBT001", "FBT002", "FBT003",  # boolean positional/default — Typer flags
+    "ARG001",        # unused fn arg — Typer callback uses by side-effect
+    "RSE102",        # raise Exit() — explicit > implicit, Typer idiom
+    "TC003",         # TYPE_CHECKING split — overengineering for our size
+    "PTH119",        # os.path.basename — keeping urllib-style symmetry
+    "PTH123",        # builtin open — fine inline
+    "PT004", "PT005",    # pytest fixture names — BDD has its own conventions
+
+    # ─── too opinionated for a small CLI like this ───────────────────
+    "D",             # whole pydocstyle namespace
+    "ANN",           # exhaustive type annotations
+    "FIX", "TD",     # banner format for TODO/FIXME
+    "ERA",           # commented-out code (false positives)
+    "EM",            # exception message format (low value)
+    "TRY003",        # raise long message
+    "RUF012",        # mutable class attrs (we use as data)
+    "PLR2004",       # magic numbers in tests/CLI defaults
+    "PLR0913",       # too many arguments — Typer commands need them
+    "S101",          # assert in tests
+    "S603", "S607",  # subprocess calls in tests
+    "INP001",        # implicit namespace package — tests/ is fine
+    "S310",          # urlopen scheme audit — URLs are HTTPS literals
+    "S311",          # random.choice for tip is cosmetic, not crypto
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "PT004", "PT005",       # pytest fixture naming (BDD has its own)
+    "T201",                 # print in tests
+    "PLR2004",              # magic values in assertions
+]
+
+# ── pytest ───────────────────────────────────────────────────────────
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-q"
+bdd_features_base_dir = "tests/features"
