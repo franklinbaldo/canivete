@@ -10,7 +10,6 @@ from rich.tree import Tree
 
 from canivete import __version__
 
-
 console = Console()
 err_console = Console(stderr=True)
 

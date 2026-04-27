@@ -16,13 +16,11 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.table import Table
 
 from canivete.ui import console, err_console
-
 
 app = typer.Typer(
     name="cron",
@@ -108,10 +106,10 @@ def _replay() -> dict:
 def cron_add(
     prompt: str = typer.Argument(
         ..., help="Prompt that will be delivered when the job fires."),
-    at: Optional[str] = typer.Option(
+    at: str | None = typer.Option(
         None, "--at",
         help="Absolute time, ISO 8601 (e.g. 2026-04-27T09:00:00-03:00)."),
-    in_: Optional[str] = typer.Option(
+    in_: str | None = typer.Option(
         None, "--in",
         help="Relative duration (e.g. 30m, 2h, 1d, 90s)."),
 ):

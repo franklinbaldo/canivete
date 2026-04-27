@@ -15,12 +15,10 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Optional
 
 import typer
 
 from canivete.ui import console, err_console
-
 
 app = typer.Typer(
     name="tg",
@@ -108,10 +106,10 @@ def _send(method: str, fields: dict, files: dict | None = None) -> None:
     except urllib.error.HTTPError as e:
         err_console.print(
             f"[red]HTTP {e.code}:[/] {e.read().decode(errors='replace')}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except (urllib.error.URLError, OSError) as e:
         err_console.print(f"[red]Network error:[/] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     if not result.get("ok"):
         err_console.print(f"[red]Telegram returned not-ok:[/] {result}")
         raise typer.Exit(1)
@@ -124,9 +122,9 @@ def _send(method: str, fields: dict, files: dict | None = None) -> None:
 @app.command("text", help="Send plain text.")
 def send_text(
     text: str = typer.Argument(..., help="Message text."),
-    chat_id: Optional[str] = typer.Option(
+    chat_id: str | None = typer.Option(
         None, "--chat-id", help="Destination. Default: CRON_CHAT_ID."),
-    reply_to: Optional[int] = typer.Option(
+    reply_to: int | None = typer.Option(
         None, "--reply-to", help="message_id to reply to."),
 ):
     _send("sendMessage", {
@@ -144,11 +142,11 @@ def _make_captioned(method: str, file_param: str):
             ..., exists=True, file_okay=True, dir_okay=False,
             readable=True, resolve_path=True,
             help="Path to local file."),
-        caption: Optional[str] = typer.Option(
+        caption: str | None = typer.Option(
             None, "--caption", help="Caption text (optional)."),
-        chat_id: Optional[str] = typer.Option(
+        chat_id: str | None = typer.Option(
             None, "--chat-id", help="Destination. Default: CRON_CHAT_ID."),
-        reply_to: Optional[int] = typer.Option(
+        reply_to: int | None = typer.Option(
             None, "--reply-to", help="message_id to reply to."),
     ):
         fields = {"chat_id": chat_id or _default_chat(),
@@ -166,9 +164,9 @@ def _make_uncaptioned(method: str, file_param: str):
             ..., exists=True, file_okay=True, dir_okay=False,
             readable=True, resolve_path=True,
             help="Path to local file."),
-        chat_id: Optional[str] = typer.Option(
+        chat_id: str | None = typer.Option(
             None, "--chat-id", help="Destination. Default: CRON_CHAT_ID."),
-        reply_to: Optional[int] = typer.Option(
+        reply_to: int | None = typer.Option(
             None, "--reply-to", help="message_id to reply to."),
     ):
         fields = {"chat_id": chat_id or _default_chat(),

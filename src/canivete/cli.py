@@ -10,7 +10,6 @@ from canivete.cron import app as cron_app
 from canivete.tg import app as tg_app
 from canivete.ui import show_overview
 
-
 app = typer.Typer(
     name="canivete",
     help="🔧 canivete — swiss-army CLI for AI agents on Telegram.",
