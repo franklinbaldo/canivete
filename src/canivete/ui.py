@@ -23,6 +23,8 @@ TIPS: list[str] = [
     'canivete cron add --at "2026-12-31T23:59:00-03:00" "year recap"',
     "canivete cron list",
     "canivete tg --help    (every subcommand has --help)",
+    'canivete profile name "Claudio Funes"',
+    "canivete profile show",
 ]
 
 
@@ -31,6 +33,7 @@ TIPS: list[str] = [
 COMMANDS: list[tuple[str, str, str, str]] = [
     ("tg", "📨", "blue", "send messages and files via Telegram"),
     ("cron", "⏰", "yellow", "schedule prompts for yourself"),
+    ("profile", "📸", "magenta", "configure the bot's Telegram identity"),
 ]
 
 
