@@ -248,3 +248,139 @@ def smoke_test_both(test_context):
             patch("canivete.bot.daemon.asyncio.create_task"),
         ):
             worker.spawn_backend("Hi")
+
+
+from canivete.bot.daemon import build_system_prompt
+
+
+@pytest.fixture
+def agent_root(tmp_path):
+    root = tmp_path / "agent_root"
+    root.mkdir()
+    return root
+
+
+@given("an agent root with SOUL.md, TOOLS.md, CLAUDE.md, and README.md")
+def agent_root_with_soul_tools_claude_readme(agent_root):
+    (agent_root / "SOUL.md").write_text("I am Soul.", encoding="utf-8")
+    (agent_root / "TOOLS.md").write_text("I have tools.", encoding="utf-8")
+    (agent_root / "CLAUDE.md").write_text("Claude config", encoding="utf-8")
+    (agent_root / "README.md").write_text("Readme info", encoding="utf-8")
+    return agent_root
+
+
+@when("I build the system prompt")
+def run_build_system_prompt(test_context, agent_root):
+    test_context["system_prompt"] = build_system_prompt(agent_root)
+
+
+@then("it returns a string with SOUL.md and TOOLS.md concatenated")
+def check_soul_tools_concat(test_context):
+    sp = test_context["system_prompt"]
+    assert "I am Soul." in sp
+    assert "I have tools." in sp
+
+
+@then('the string contains "# SOUL.md" and "# TOOLS.md"')
+def check_soul_tools_headers(test_context):
+    sp = test_context["system_prompt"]
+    assert "# SOUL.md" in sp
+    assert "# TOOLS.md" in sp
+    # Ordem alfabética
+    assert sp.find("# SOUL.md") < sp.find("# TOOLS.md")
+
+
+@given("an agent root with SOUL.md, CLAUDE.md, GEMINI.md, README.md, and SYSTEM.md")
+def agent_root_with_skips(agent_root):
+    (agent_root / "SOUL.md").write_text("I am Soul.", encoding="utf-8")
+    (agent_root / "CLAUDE.md").write_text("Claude config", encoding="utf-8")
+    (agent_root / "GEMINI.md").write_text("Gemini config", encoding="utf-8")
+    (agent_root / "README.md").write_text("Readme info", encoding="utf-8")
+    (agent_root / "SYSTEM.md").write_text("System generated", encoding="utf-8")
+    return agent_root
+
+
+@then("it returns a string with SOUL.md only")
+def check_soul_only(test_context):
+    sp = test_context["system_prompt"]
+    assert "I am Soul." in sp
+
+
+@then("it does not contain CLAUDE.md, GEMINI.md, README.md, or SYSTEM.md")
+def check_no_skips(test_context):
+    sp = test_context["system_prompt"]
+    assert "Claude config" not in sp
+    assert "Gemini config" not in sp
+    assert "Readme info" not in sp
+    assert "System generated" not in sp
+
+
+@given("an agent root with SOUL.md and notes.md")
+def agent_root_with_notes(agent_root):
+    (agent_root / "SOUL.md").write_text("I am Soul.", encoding="utf-8")
+    (agent_root / "notes.md").write_text("Just some notes.", encoding="utf-8")
+    return agent_root
+
+
+@then("it does not contain notes.md")
+def check_no_notes(test_context):
+    sp = test_context["system_prompt"]
+    assert "Just some notes." not in sp
+
+
+@given("an agent root with no all-caps md files")
+def agent_root_empty(agent_root):
+    (agent_root / "README.md").write_text("Just readme", encoding="utf-8")
+    return agent_root
+
+
+@then("it returns an empty string")
+def check_empty_string(test_context):
+    sp = test_context["system_prompt"]
+    assert sp == ""
+
+
+@when('I spawn ClaudeCodeBackend with a system prompt "I am Claudio"')
+def spawn_claude_backend(test_context):
+    from canivete.bot.backends.claude_code import ClaudeCodeBackend
+
+    backend = ClaudeCodeBackend()
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+        backend.spawn("hello", session_id=None, attachments=[], system_prompt="I am Claudio")
+        test_context["mock_popen"] = mock_popen
+
+
+@then('the claude command includes "--append-system-prompt" and "I am Claudio"')
+def check_claude_command(test_context):
+    mock_popen = test_context["mock_popen"]
+    mock_popen.assert_called_once()
+    args = mock_popen.call_args[0][0]
+    assert "--append-system-prompt" in args
+    idx = args.index("--append-system-prompt")
+    assert args[idx + 1] == "I am Claudio"
+
+
+@when('I spawn GeminiCliBackend with a system prompt "I am Aparicio"')
+def spawn_gemini_backend(test_context, monkeypatch, tmp_path):
+    from canivete.bot.backends.gemini_cli import GeminiCliBackend
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("WORKSPACE", str(workspace))
+    test_context["workspace"] = workspace
+
+    backend = GeminiCliBackend()
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+        backend.spawn("hello", session_id=None, attachments=[], system_prompt="I am Aparicio")
+
+
+@then('it writes "I am Aparicio" to GEMINI.md in the workspace')
+def check_gemini_md_write(test_context):
+    workspace = test_context["workspace"]
+    gemini_md = workspace / "GEMINI.md"
+    assert gemini_md.exists()
+    assert gemini_md.read_text(encoding="utf-8") == "I am Aparicio"
