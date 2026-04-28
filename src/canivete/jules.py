@@ -61,15 +61,13 @@ class JulesClient:
                 content = resp.read()
                 return json.loads(content) if content else {}
         except urllib.error.HTTPError as e:
-            err_body = e.read().decode(errors='replace')
+            err_body = e.read().decode(errors="replace")
             try:
                 err_data = json.loads(err_body)
                 msg = err_data.get("error", {}).get("message", str(e))
                 err_console.print(f"[red]Jules API Error ({e.code}):[/red] {msg}")
             except Exception:  # noqa: BLE001  # noqa: BLE001
-                err_console.print(
-                    f"[red]Jules API Error ({e.code}):[/red] {err_body}"
-                )
+                err_console.print(f"[red]Jules API Error ({e.code}):[/red] {err_body}")
             raise typer.Exit(1) from e
         except urllib.error.URLError as e:
             err_console.print(f"[red]Network Error:[/red] {e}")
