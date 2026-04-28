@@ -23,6 +23,7 @@ TIPS: list[str] = [
     'canivete cron add --at "2026-12-31T23:59:00-03:00" "year recap"',
     "canivete cron list",
     "canivete tg --help    (every subcommand has --help)",
+    'canivete tg buttons "Confirm deploy?" --row "Yes:yes" "No:no"',
 ]
 
 
