@@ -31,3 +31,8 @@ Feature: Schedule prompts for later
     When I remove the most recently added job
     Then the command exits with code 0
     And listing no longer shows "to be removed"
+
+  Scenario: Log path falls back to HOME when neither CRON_LOG nor WORKSPACE is set
+    Given no CRON_LOG, WORKSPACE, or XDG_DATA_HOME is set
+    When I import the cron module
+    Then the resolved log path is under HOME/.local/share/canivete

@@ -1,11 +1,18 @@
 """`canivete cron` — schedule prompts for yourself.
 
-The bot daemon polls `/workspace/.cron.jsonl` (override with `CRON_LOG`)
-and, when a job is due, drops the prompt into your input queue as if it
-were a message from the user. Use it to remember to do something later.
+The bot daemon polls the cron log (default location resolved per the
+fallback chain below) and, when a job is due, drops the prompt into
+your input queue as if it were a message from the user. Use it to
+remember to do something later.
 
 Storage is an append-only JSONL log; the current state is the replay of
 events (`add` / `fired` / `remove`). Side-effect free reads.
+
+Log path resolution (first match wins):
+  1. ``$CRON_LOG``                                — explicit override.
+  2. ``$WORKSPACE/.cron.jsonl``                   — Funes harness layout.
+  3. ``$XDG_DATA_HOME/canivete/cron.jsonl``
+  4. ``$HOME/.local/share/canivete/cron.jsonl``  — last-resort default.
 """
 
 from __future__ import annotations
@@ -30,7 +37,21 @@ app = typer.Typer(
 )
 
 
-LOG = Path(os.environ.get("CRON_LOG", "/workspace/.cron.jsonl"))
+def _default_log_path() -> Path:
+    """Resolve the cron log path with a writable cascade. We avoid the
+    old hardcoded ``/workspace/.cron.jsonl`` because non-Funes contexts
+    (Jules CodeAssist sandboxes, plain laptops, etc.) don't have that
+    directory and the command would fail with a permission error."""
+    if override := os.environ.get("CRON_LOG"):
+        return Path(override)
+    if ws := os.environ.get("WORKSPACE"):
+        return Path(ws) / ".cron.jsonl"
+    if xdg := os.environ.get("XDG_DATA_HOME"):
+        return Path(xdg) / "canivete" / "cron.jsonl"
+    return Path.home() / ".local" / "share" / "canivete" / "cron.jsonl"
+
+
+LOG = _default_log_path()
 
 
 # ─── Time helpers ────────────────────────────────────────────────────

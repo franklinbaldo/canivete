@@ -9,6 +9,8 @@ from pathlib import Path
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from canivete.cron import _default_log_path
+
 scenarios("../features/cron.feature")
 
 
@@ -61,3 +63,22 @@ def _list_doesnt_show(cron_log: Path, needle: str) -> None:
     r = _canivete(["cron", "list"], cron_log)
     assert r.returncode == 0, r.stderr
     assert needle not in (r.stdout + r.stderr), f"unexpectedly found {needle!r}"
+
+
+@given("no CRON_LOG, WORKSPACE, or XDG_DATA_HOME is set")
+def _strip_env(monkeypatch) -> None:
+    for k in ("CRON_LOG", "WORKSPACE", "XDG_DATA_HOME"):
+        monkeypatch.delenv(k, raising=False)
+
+
+@when("I import the cron module", target_fixture="resolved_log")
+def _resolve_log() -> Path:
+    return _default_log_path()
+
+
+@then("the resolved log path is under HOME/.local/share/canivete")
+def _path_under_home(resolved_log: Path) -> None:
+    expected_root = Path.home() / ".local" / "share" / "canivete"
+    assert str(resolved_log).startswith(str(expected_root)), (
+        f"expected {resolved_log} to start with {expected_root}"
+    )
