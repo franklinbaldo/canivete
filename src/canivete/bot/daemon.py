@@ -21,11 +21,10 @@ from canivete.tg import _api_url
 err_console = Console(stderr=True)
 console = Console()
 
+
 def _post_json(url: str, payload: dict) -> dict | None:
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return json.loads(resp.read())
@@ -33,12 +32,16 @@ def _post_json(url: str, payload: dict) -> dict | None:
         err_console.print(f"[red]Telegram API Error:[/] {e}")
         return None
 
+
 def _get_updates(offset: int) -> list[dict]:
     url = _api_url("getUpdates")
-    res = _post_json(url, {"offset": offset, "timeout": 30, "allowed_updates": ["message", "callback_query"]})
+    res = _post_json(
+        url, {"offset": offset, "timeout": 30, "allowed_updates": ["message", "callback_query"]}
+    )
     if res and res.get("ok"):
         return res.get("result", [])
     return []
+
 
 def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> int | None:
     url = _api_url("sendMessage")
@@ -50,10 +53,12 @@ def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> 
         return res["result"]["message_id"]
     return None
 
+
 def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
     url = _api_url("editMessageText")
     payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
     _post_json(url, payload)
+
 
 class ChatWorker:
     def __init__(self, chat_id: int, backend_name: str):
@@ -91,7 +96,9 @@ class ChatWorker:
         )
 
         if hasattr(self.backend, "proc") and self.backend.proc.stderr:
-            thread = Thread(target=self._watch_stderr, args=(self.backend.proc.stderr,), daemon=True)
+            thread = Thread(
+                target=self._watch_stderr, args=(self.backend.proc.stderr,), daemon=True
+            )
             thread.start()
 
         thread_timeout = Thread(target=self._watch_timeout, daemon=True)
@@ -190,10 +197,15 @@ duration: {duration}s
             asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, "Session reset."))
             return
         if text in ("/status", "/cron", "/config"):
-            asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, "Command not implemented in meta-harness yet."))
+            asyncio.create_task(
+                asyncio.to_thread(
+                    send_message, self.chat_id, "Command not implemented in meta-harness yet."
+                )
+            )
             return
 
         self.spawn_backend(text)
+
 
 class Daemon:
     def __init__(self, backend_name: str):
@@ -234,6 +246,7 @@ class Daemon:
                             self.get_worker(chat_id).handle_text(pseudo_msg)
 
             await asyncio.sleep(0.5)
+
 
 def run_daemon(backend_name: str):
     daemon = Daemon(backend_name)

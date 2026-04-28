@@ -31,7 +31,15 @@ class ClaudeCodeBackend:
         session_id: str | None,
         attachments: list[Path],
     ) -> SpawnResult:
-        cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
+        cmd = [
+            "claude",
+            "-p",
+            prompt,
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--dangerously-skip-permissions",
+        ]
         if session_id:
             cmd.append("--continue")
 

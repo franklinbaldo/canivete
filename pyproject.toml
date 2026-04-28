@@ -105,6 +105,27 @@ ignore = [
     "PT004", "PT005",       # pytest fixture naming (BDD has its own)
     "T201",                 # print in tests
     "PLR2004",              # magic values in assertions
+    "SLF001",               # private member access — tests legitimately do this
+    "F841",                 # unused locals (BDD step return values)
+    "S105",                 # hardcoded fake credentials in tests
+    "PLC0415",              # local imports in step defs (per-fixture isolation)
+    "E402",                 # module-level import not at top (BDD layout)
+]
+"src/canivete/bot/**" = [
+    # Daemon-style code: subprocess management, async event loops, broad
+    # exception handling at the orchestration layer is intentional. The
+    # specific event handlers that catch and swallow are top-level
+    # supervisors — failures there must not propagate up and kill the
+    # daemon.
+    "BLE001",               # blind exception — daemon supervisors catch all
+    "S110",                 # try/except/pass — same supervisor reason
+    "SIM105",               # contextlib.suppress vs try/except/pass — equivalent here
+    "C901", "PLR0911", "PLR0912",  # complexity in event _stream / render dispatcher
+    "ARG002",               # unused method args — Backend protocol uniformity
+    "RUF006",               # asyncio.create_task without saved ref — fire-and-forget supervisor
+    "PERF401",              # list comprehension over .extend — readability wins
+    "PLC0415",              # local imports — break circular deps in command handlers
+    "B904",                 # raise X — wrapping context not always added in adapter layer
 ]
 
 # ── pytest ───────────────────────────────────────────────────────────

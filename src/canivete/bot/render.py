@@ -21,13 +21,16 @@ def render_event(event: BackendEvent) -> str:
         subject = event.subject or "Thinking"
         desc = event.description or ""
         import jinja2
+
         template = jinja2.Template("🤔 **{{ subject }}**\n_{{ desc }}_")
         rendered = template.render(subject=subject, desc=desc)
         return telegramify_markdown.markdownify(rendered)
     if event.kind == "error":
         return telegramify_markdown.markdownify(f"⚠️ **Error:** {event.message}")
     if event.kind == "stats":
-        return telegramify_markdown.markdownify(f"📊 *Stats:* {event.duration_ms}ms, in: {event.tokens_in}, out: {event.tokens_out}")
+        return telegramify_markdown.markdownify(
+            f"📊 *Stats:* {event.duration_ms}ms, in: {event.tokens_in}, out: {event.tokens_out}"
+        )
     if event.kind == "done":
         return telegramify_markdown.markdownify(f"🏁 *Done.* Session: `{event.session_id}`")
     return ""

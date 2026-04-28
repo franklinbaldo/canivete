@@ -19,6 +19,7 @@ import pytest
 def test_context():
     return {}
 
+
 @when('I run "canivete bot --help"')
 def run_bot_help(test_context):
     result = runner.invoke(app, ["bot", "--help"])
@@ -56,9 +57,11 @@ def user_sends_hello(test_context):
 @then('the bot daemon should spawn the "gemini-cli" backend with prompt "Hello agent"')
 def daemon_spawns_gemini(test_context):
     worker = ChatWorker(chat_id=123, backend_name="gemini-cli")
-    with patch("subprocess.Popen") as mock_popen, \
-         patch("canivete.bot.daemon.Thread"), \
-         patch("canivete.bot.daemon.asyncio.create_task"):
+    with (
+        patch("subprocess.Popen") as mock_popen,
+        patch("canivete.bot.daemon.Thread"),
+        patch("canivete.bot.daemon.asyncio.create_task"),
+    ):
         mock_proc = MagicMock()
         mock_popen.return_value = mock_proc
         worker.spawn_backend(test_context["prompt"])
@@ -78,7 +81,7 @@ def backend_emits_text_done(test_context):
     test_context["mock_events"] = mock_events()
 
 
-@when('a user sends a message')
+@when("a user sends a message")
 def user_sends_msg(test_context):
     pass
 
@@ -87,10 +90,12 @@ def user_sends_msg(test_context):
 def daemon_calls_edit(test_context):
     worker = ChatWorker(chat_id=123, backend_name="gemini-cli")
 
-    with patch("canivete.bot.daemon.send_message", return_value=456), \
-         patch("canivete.bot.daemon.edit_message") as mock_edit:
-
+    with (
+        patch("canivete.bot.daemon.send_message", return_value=456),
+        patch("canivete.bot.daemon.edit_message") as mock_edit,
+    ):
         from canivete.bot.backends.base import SpawnResult
+
         spawn_res = SpawnResult(events=test_context["mock_events"], session_id="123")
 
         asyncio.run(worker._consume_events(spawn_res))
@@ -104,7 +109,7 @@ def backend_stderr_exhausted(test_context):
     pass
 
 
-@then('the daemon immediately kills the subprocess')
+@then("the daemon immediately kills the subprocess")
 def daemon_kills_subprocess(test_context):
     worker = ChatWorker(chat_id=123, backend_name="gemini-cli")
 
@@ -123,9 +128,11 @@ def daemon_kills_subprocess(test_context):
 @then('the daemon posts an error message with suggestion for "rate_limit"')
 def check_error_message(test_context):
     worker = test_context["worker"]
-    with patch("canivete.bot.daemon.asyncio.create_task") as mock_task, \
-         patch("canivete.bot.daemon.asyncio.to_thread") as mock_thread, \
-         patch("canivete.bot.daemon.send_message") as mock_send:
+    with (
+        patch("canivete.bot.daemon.asyncio.create_task") as mock_task,
+        patch("canivete.bot.daemon.asyncio.to_thread") as mock_thread,
+        patch("canivete.bot.daemon.send_message") as mock_send,
+    ):
         worker._handle_fatal_exit()
         mock_task.assert_called_once()
         args = mock_thread.call_args[0]
@@ -137,7 +144,7 @@ def backend_hangs(test_context):
     pass
 
 
-@then('the daemon kills the subprocess')
+@then("the daemon kills the subprocess")
 def daemon_timeout_kills(test_context):
     worker = ChatWorker(chat_id=123, backend_name="gemini-cli")
     worker.is_running = True
@@ -152,12 +159,14 @@ def daemon_timeout_kills(test_context):
     test_context["worker"] = worker
 
 
-@then('the daemon posts a timeout error message')
+@then("the daemon posts a timeout error message")
 def daemon_posts_timeout(test_context):
     worker = test_context["worker"]
-    with patch("canivete.bot.daemon.asyncio.create_task") as mock_task, \
-         patch("canivete.bot.daemon.asyncio.to_thread") as mock_thread, \
-         patch("canivete.bot.daemon.send_message") as mock_send:
+    with (
+        patch("canivete.bot.daemon.asyncio.create_task") as mock_task,
+        patch("canivete.bot.daemon.asyncio.to_thread") as mock_thread,
+        patch("canivete.bot.daemon.send_message") as mock_send,
+    ):
         worker._handle_fatal_exit()
         mock_task.assert_called_once()
         args = mock_thread.call_args[0]
@@ -169,13 +178,14 @@ def click_inline_btn(test_context):
     import os
 
     from canivete.bot.callback import handle_callback_query
+
     os.environ["TELEGRAM_BOT_TOKEN"] = "dummy"
 
     cb = {
         "id": "query_123",
         "data": "vote_yes",
         "from": {"first_name": "TestUser"},
-        "message": {"message_id": 999, "chat": {"id": 123}}
+        "message": {"message_id": 999, "chat": {"id": 123}},
     }
 
     with patch("canivete.bot.callback.urllib.request.urlopen") as mock_urlopen:
@@ -202,6 +212,7 @@ def check_pseudo_msg(test_context):
 @when('a user sends the dynamic command "/pick_2"')
 def dynamic_cmd(test_context):
     from canivete.bot.commands import handle_dynamic_command
+
     test_context["dyn_res"] = handle_dynamic_command("/pick_2", "Frank")
 
 
@@ -213,6 +224,7 @@ def check_dyn_msg(test_context):
 @when('a user sends the static command "/cancel"')
 def static_cmd(test_context):
     from canivete.bot.commands import handle_dynamic_command
+
     test_context["stat_res"] = handle_dynamic_command("/cancel", "Frank")
 
 
@@ -230,7 +242,9 @@ def smoke_simulate_both(test_context):
 def smoke_test_both(test_context):
     for b in ["gemini-cli", "claude-code"]:
         worker = ChatWorker(chat_id=123, backend_name=b)
-        with patch("subprocess.Popen"), \
-             patch("canivete.bot.daemon.Thread"), \
-             patch("canivete.bot.daemon.asyncio.create_task"):
+        with (
+            patch("subprocess.Popen"),
+            patch("canivete.bot.daemon.Thread"),
+            patch("canivete.bot.daemon.asyncio.create_task"),
+        ):
             worker.spawn_backend("Hi")

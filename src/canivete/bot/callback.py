@@ -8,11 +8,10 @@ from canivete.tg import _api_url
 
 def _post_json(url: str, payload: dict) -> dict:
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=60) as resp:
         return json.loads(resp.read())
+
 
 def handle_callback_query(query: dict[str, Any]) -> str | None:
     query_id = query.get("id")
@@ -56,4 +55,6 @@ def handle_callback_query(query: dict[str, Any]) -> str | None:
                     button_text = btn.get("text", "Unknown")
                     break
 
-    return f'[{first_name} clicked button "{button_text}" (callback_data: {data}) on message {msg_id}]'
+    return (
+        f'[{first_name} clicked button "{button_text}" (callback_data: {data}) on message {msg_id}]'
+    )

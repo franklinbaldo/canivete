@@ -8,13 +8,14 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 
+
 @app.callback(invoke_without_command=True)
 def bot(
     backend: str = typer.Option(
         None,
         "--backend",
         help="Backend to use (gemini-cli or claude-code). Defaults to AGENT_BACKEND env var or gemini-cli.",
-    )
+    ),
 ):
     try:
         import jinja2  # noqa: F401
