@@ -30,6 +30,7 @@ class ClaudeCodeBackend:
         *,
         session_id: str | None,
         attachments: list[Path],
+        system_prompt: str | None = None,
     ) -> SpawnResult:
         cmd = [
             "claude",
@@ -40,6 +41,8 @@ class ClaudeCodeBackend:
             "--verbose",
             "--dangerously-skip-permissions",
         ]
+        if system_prompt:
+            cmd.extend(["--append-system-prompt", system_prompt])
         if session_id:
             cmd.append("--continue")
 

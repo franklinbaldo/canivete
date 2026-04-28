@@ -45,3 +45,34 @@ Feature: Bot Daemon and Adapters
   Scenario: Mockable smoke assert both work
     Given we simulate both "gemini-cli" and "claude-code"
     Then both backends should handle basic message flow
+
+  Scenario: build_system_prompt concatenates all-caps md files
+    Given an agent root with SOUL.md, TOOLS.md, CLAUDE.md, and README.md
+    When I build the system prompt
+    Then it returns a string with SOUL.md and TOOLS.md concatenated
+    And the string contains "# SOUL.md" and "# TOOLS.md"
+
+  Scenario: build_system_prompt skips CLAUDE.md, GEMINI.md, README.md, and SYSTEM.md
+    Given an agent root with SOUL.md, CLAUDE.md, GEMINI.md, README.md, and SYSTEM.md
+    When I build the system prompt
+    Then it returns a string with SOUL.md only
+    And it does not contain CLAUDE.md, GEMINI.md, README.md, or SYSTEM.md
+
+  Scenario: build_system_prompt ignores non-all-caps files
+    Given an agent root with SOUL.md and notes.md
+    When I build the system prompt
+    Then it returns a string with SOUL.md only
+    And it does not contain notes.md
+
+  Scenario: build_system_prompt returns empty string if no valid manifests exist
+    Given an agent root with no all-caps md files
+    When I build the system prompt
+    Then it returns an empty string
+
+  Scenario: ClaudeCodeBackend passes system prompt via CLI flag
+    When I spawn ClaudeCodeBackend with a system prompt "I am Claudio"
+    Then the claude command includes "--append-system-prompt" and "I am Claudio"
+
+  Scenario: GeminiCliBackend writes GEMINI.md into WORKSPACE
+    When I spawn GeminiCliBackend with a system prompt "I am Aparicio"
+    Then it writes "I am Aparicio" to GEMINI.md in the workspace

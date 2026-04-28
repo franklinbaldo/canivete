@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from threading import Thread
 
 from rich.console import Console
@@ -20,6 +21,27 @@ from canivete.tg import _api_url
 
 err_console = Console(stderr=True)
 console = Console()
+
+
+def build_system_prompt(agent_root: Path) -> str:
+    """Concatena os .md ALL-CAPS na raiz do agent_root num único string,
+    pulando CLAUDE.md (auto-carregado pelo Claude Code da cwd), GEMINI.md
+    (idem pelo gemini-cli), README.md (humano), e SYSTEM.md (gerado).
+    Ordem: alfabética por filename."""
+    skip = {"CLAUDE.md", "GEMINI.md", "README.md", "SYSTEM.md"}
+    chunks = []
+    for f in sorted(agent_root.glob("*.md")):
+        if f.name in skip:
+            continue
+        if f.stem != f.stem.upper():
+            continue  # não é all-caps
+        chunks.append(f"# {f.name}\n\n{f.read_text(encoding='utf-8')}\n\n---\n")
+    return "\n".join(chunks)
+
+
+SYSTEM_PROMPT = build_system_prompt(Path(os.environ.get("AGENT_ROOT", ".")))
+if not SYSTEM_PROMPT:
+    err_console.print("[yellow]Warning:[/] no manifests found in AGENT_ROOT")
 
 
 def _post_json(url: str, payload: dict) -> dict | None:
@@ -93,6 +115,7 @@ class ChatWorker:
             prompt=prompt,
             session_id=self.session_id,
             attachments=[],
+            system_prompt=SYSTEM_PROMPT,
         )
 
         if hasattr(self.backend, "proc") and self.backend.proc.stderr:

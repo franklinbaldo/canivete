@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import subprocess
 from collections.abc import AsyncIterator
@@ -33,7 +34,12 @@ class GeminiCliBackend:
         *,
         session_id: str | None,
         attachments: list[Path],
+        system_prompt: str | None = None,
     ) -> SpawnResult:
+        if system_prompt:
+            gemini_md = Path(os.environ.get("WORKSPACE", ".")) / "GEMINI.md"
+            gemini_md.write_text(system_prompt, encoding="utf-8")
+
         cmd = ["gemini"]
         if session_id:
             cmd.extend(["--resume", session_id])
