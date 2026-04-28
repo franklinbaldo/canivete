@@ -7,6 +7,7 @@ import typer
 
 from canivete import __version__
 from canivete.cron import app as cron_app
+from canivete.profile import app as profile_app
 from canivete.tg import app as tg_app
 from canivete.ui import show_overview
 
@@ -21,6 +22,7 @@ app = typer.Typer(
 
 app.add_typer(tg_app, name="tg")
 app.add_typer(cron_app, name="cron")
+app.add_typer(profile_app, name="profile")
 
 
 def _version_callback(value: bool) -> None:

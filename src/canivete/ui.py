@@ -24,6 +24,8 @@ TIPS: list[str] = [
     "canivete cron list",
     "canivete tg --help    (every subcommand has --help)",
     'canivete tg buttons "Confirm deploy?" --row "Yes:yes" "No:no"',
+    'canivete profile name "Claudio Funes"',
+    "canivete profile show",
 ]
 
 
@@ -32,6 +34,7 @@ TIPS: list[str] = [
 COMMANDS: list[tuple[str, str, str, str]] = [
     ("tg", "📨", "blue", "send messages and files via Telegram"),
     ("cron", "⏰", "yellow", "schedule prompts for yourself"),
+    ("profile", "📸", "magenta", "configure the bot's Telegram identity"),
 ]
 
 
