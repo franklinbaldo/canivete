@@ -1,6 +1,7 @@
 """Bind the buttons feature scenarios. Steps come from ``conftest.py``."""
 
 import json
+import re
 import shlex
 import urllib.parse
 from unittest.mock import MagicMock, patch
@@ -20,12 +21,12 @@ def run_tg_buttons_mocked(argstr, monkeypatch):
     """Run `canivete tg buttons` with mocked urllib.request.urlopen."""
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake_token")
     monkeypatch.setenv("CRON_CHAT_ID", "123")
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
 
     with patch("urllib.request.urlopen") as mock_urlopen:
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps(
-            {"ok": True, "result": {"message_id": 42}}
-        ).encode()
+        mock_resp.read.return_value = json.dumps({"ok": True, "result": {"message_id": 42}}).encode()
         mock_resp.__enter__.return_value = mock_resp
         mock_urlopen.return_value = mock_resp
 
@@ -42,9 +43,7 @@ def run_tg_buttons_mocked(argstr, monkeypatch):
 @then("the command exits with code 0")
 def the_command_exits_with_code_0(result):
     if hasattr(result, "exit_code"):
-        assert result.exit_code == 0, (
-            f"Command failed: {result.stdout} exception: {getattr(result, 'exception', '')}"
-        )
+        assert result.exit_code == 0, f"Command failed: {result.stdout} exception: {getattr(result, 'exception', '')}"
     else:
         assert result.returncode == 0, f"Command failed: {result.stdout}"
 
@@ -78,6 +77,8 @@ def api_called(result, expected_text, label1, data1, label2, data2):
 @then(parsers.parse('the output contains "{needle}"'))
 def the_output_contains(result, needle):
     haystack = result.stdout if hasattr(result, "exit_code") else result.stdout + result.stderr
-    assert needle.replace("\\n", " ") in haystack.replace("\\n", " ") or needle in haystack, (
-        f"missing {needle!r} in:\\n{haystack}"
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    clean_haystack = ansi_escape.sub('', haystack)
+    assert needle.replace("\\n", " ") in clean_haystack.replace("\\n", " ") or needle in clean_haystack, (
+        f"missing {needle!r} in:\n{clean_haystack}"
     )
