@@ -5,6 +5,7 @@ one feature lives here in conftest.py to be available everywhere."""
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
@@ -12,11 +13,14 @@ import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
 import respx
-from pytest_bdd import parsers, then, when
+from pytest_bdd import given, parsers, then, when
 from typer.testing import CliRunner
 
 from canivete.cli import app
@@ -179,3 +183,100 @@ def _exits_nonzero(result: subprocess.CompletedProcess) -> None:
 def _output_contains(result: subprocess.CompletedProcess, needle: str) -> None:
     haystack = result.stdout + result.stderr
     assert needle in haystack, f"missing {needle!r} in:\n{haystack}"
+
+
+@pytest.fixture
+def mock_urllib(monkeypatch):
+    mock = MagicMock()
+    mock.return_value.__enter__.return_value.read.return_value = (
+        b'{"ok": true, "result": {"message_id": 123}}'
+    )
+    monkeypatch.setattr("urllib.request.urlopen", mock)
+    return mock
+
+
+@when(parsers.parse("I run `{command}`"))
+def run_command_with_mock(command, monkeypatch, mock_urllib, cli_state):
+    """Run via CliRunner (same process) so the urllib monkeypatch
+    actually intercepts the requests. Subprocess wouldn't see the mock."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake_token")
+    monkeypatch.setenv("CRON_CHAT_ID", "123")
+    args = shlex.split(command)
+    # remove "canivete"
+    args = args[1:]
+
+    runner = CliRunner()
+    res = runner.invoke(app, args, catch_exceptions=False)
+    cli_state["result"] = SimpleNamespace(
+        returncode=res.exit_code,
+        stdout=res.output or "",
+        stderr=res.output or "",  # no separate stderr in CliRunner default
+    )
+    cli_state["urllib_mock"] = mock_urllib
+
+
+@then("it exits with 0")
+def exits_0(cli_state):
+    assert cli_state["result"].returncode == 0, cli_state["result"].stderr
+
+
+@then("it exits with 1")
+def exits_1(cli_state):
+    assert cli_state["result"].returncode == 1, cli_state["result"].stderr
+
+
+@then(parsers.parse('urllib was called with "{method}"'))
+def urllib_called_with(cli_state, method):
+    mock = cli_state["urllib_mock"]
+    assert mock.call_count > 0
+    url = mock.call_args[0][0].full_url
+    assert url.endswith(f"/{method}")
+
+
+@then(
+    parsers.parse('the urlopen request data has scope type "{scope_type}" and chat_id "{chat_id}"')
+)
+def urlopen_request_data_has_scope(cli_state, scope_type, chat_id):
+    mock = cli_state["urllib_mock"]
+    req = mock.call_args[0][0]
+    data = req.data.decode()
+    parsed = parse_qs(data)
+    assert "scope" in parsed
+    scope = json.loads(parsed["scope"][0])
+    assert scope["type"] == scope_type
+    assert str(scope["chat_id"]) == chat_id
+
+
+@then(parsers.parse('the urlopen request data has commands with "{cmd1}" and "{cmd2}"'))
+def urlopen_request_data_has_commands(cli_state, cmd1, cmd2):
+    mock = cli_state["urllib_mock"]
+    req = mock.call_args[0][0]
+    data = req.data.decode()
+    parsed = parse_qs(data)
+    assert "commands" in parsed
+    commands = json.loads(parsed["commands"][0])
+    cmds = [c["command"] for c in commands]
+    assert cmd1 in cmds
+    assert cmd2 in cmds
+
+
+@then(parsers.parse('stderr contains "{needle}"'))
+def stderr_contains(cli_state, needle):
+    assert needle in cli_state["result"].stderr
+
+
+@then(parsers.parse('stdout contains "{needle}"'))
+def stdout_contains(cli_state, needle):
+    assert needle in cli_state["result"].stdout
+
+
+@given("I mock urllib")
+def given_mock_urllib(mock_urllib):
+    pass
+
+
+@given("I mock urllib with predefined response for list commands")
+def given_mock_urllib_list_cmds(monkeypatch, mock_urllib):
+    mock_urllib.return_value.__enter__.return_value.read.return_value = (
+        b'{"ok": true, "result": [{"command": "pick_1", "description": "option one"}]}'
+    )
