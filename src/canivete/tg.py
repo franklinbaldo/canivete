@@ -313,3 +313,112 @@ def send_buttons(  # noqa: C901, PLR0912, PLR0915
             "reply_markup": json.dumps({"inline_keyboard": inline_keyboard}),
         },
     )
+
+
+# ─── commands subgroup (chat-scoped slash menu) ──────────────────────
+
+
+commands_app = typer.Typer(
+    name="commands",
+    help="📋 [yellow]Manage chat-scoped slash command menu.[/]",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+app.add_typer(commands_app, name="commands")
+
+
+_COMMAND_NAME_RE = re.compile(r"^[a-z0-9_]{1,32}$")
+
+
+def _chat_scope(chat_id: str) -> str:
+    """JSON-encoded scope object for setMyCommands / deleteMyCommands /
+    getMyCommands. Telegram expects scope as a string inside the form body."""
+    return json.dumps({"type": "chat", "chat_id": int(chat_id)})
+
+
+def _parse_command_pair(raw: str) -> dict:
+    """Parse a 'COMMAND:DESCRIPTION' string. Telegram limits: command is
+    1-32 chars of [a-z0-9_], description max 256 chars."""
+    if ":" not in raw:
+        raise typer.BadParameter(
+            f"Invalid command spec {raw!r}: missing ':'. Expected 'name:description'."
+        )
+    name, desc = raw.split(":", 1)
+    name = name.strip()
+    desc = desc.strip()
+    if not _COMMAND_NAME_RE.fullmatch(name):
+        err_console.print(
+            f"[red]Invalid command name {name!r}: must be lowercase a-z, 0-9, _; 1-32 chars.[/]"
+        )
+        raise typer.Exit(1)
+    if len(desc) > 256:
+        err_console.print(f"[red]Description for {name!r} too long ({len(desc)} > 256 chars).[/]")
+        raise typer.Exit(1)
+    return {"command": name, "description": desc}
+
+
+def _call_telegram(method: str, fields: dict) -> dict:
+    """Like `_send` but without message_id extraction. Returns the
+    parsed response so the caller can inspect `result` (which may be
+    a bool, list, or object depending on the method)."""
+    url = _api_url(method)
+    try:
+        return _post_form(url, fields)
+    except urllib.error.HTTPError as e:
+        err_console.print(f"[red]HTTP {e.code}:[/] {e.read().decode(errors='replace')}")
+        raise typer.Exit(1) from e
+    except (urllib.error.URLError, OSError) as e:
+        err_console.print(f"[red]Network error:[/] {e}")
+        raise typer.Exit(1) from e
+
+
+@commands_app.command("set", help="Publish chat-scoped slash commands.")
+def commands_set(
+    pairs: list[str] = typer.Argument(..., help="One or more COMMAND:DESCRIPTION pairs."),
+    chat_id: str | None = typer.Option(
+        None, "--chat-id", help="Destination chat. Default: CRON_CHAT_ID."
+    ),
+):
+    cid = chat_id or _default_chat()
+    payload = [_parse_command_pair(p) for p in pairs]
+    res = _call_telegram(
+        "setMyCommands",
+        {"commands": json.dumps(payload), "scope": _chat_scope(cid)},
+    )
+    if not res.get("ok"):
+        err_console.print(f"[red]Telegram returned not-ok:[/] {res}")
+        raise typer.Exit(1)
+    console.print(f"[green]✓[/] published {len(payload)} command(s) to chat [cyan]{cid}[/]")
+
+
+@commands_app.command("clear", help="Delete chat-scoped slash commands (back to global).")
+def commands_clear(
+    chat_id: str | None = typer.Option(
+        None, "--chat-id", help="Destination chat. Default: CRON_CHAT_ID."
+    ),
+):
+    cid = chat_id or _default_chat()
+    res = _call_telegram("deleteMyCommands", {"scope": _chat_scope(cid)})
+    if not res.get("ok"):
+        err_console.print(f"[red]Telegram returned not-ok:[/] {res}")
+        raise typer.Exit(1)
+    console.print(f"[green]✓[/] cleared chat-scoped commands for chat [cyan]{cid}[/]")
+
+
+@commands_app.command("list", help="List currently published chat-scoped commands.")
+def commands_list(
+    chat_id: str | None = typer.Option(
+        None, "--chat-id", help="Destination chat. Default: CRON_CHAT_ID."
+    ),
+):
+    cid = chat_id or _default_chat()
+    res = _call_telegram("getMyCommands", {"scope": _chat_scope(cid)})
+    if not res.get("ok"):
+        err_console.print(f"[red]Telegram returned not-ok:[/] {res}")
+        raise typer.Exit(1)
+    cmds = res.get("result", []) or []
+    if not cmds:
+        console.print("[dim](no chat-scoped commands)[/]")
+        return
+    for c in cmds:
+        console.print(f"  /{c.get('command', '?')}  {c.get('description', '')}")
