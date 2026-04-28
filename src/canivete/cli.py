@@ -6,6 +6,7 @@ from __future__ import annotations
 import typer
 
 from canivete import __version__
+from canivete.bot.cli import app as bot_app
 from canivete.cron import app as cron_app
 from canivete.jules import app as jules_app
 from canivete.miniapp import app as miniapp_app
@@ -27,6 +28,7 @@ app.add_typer(cron_app, name="cron")
 app.add_typer(profile_app, name="profile")
 app.add_typer(miniapp_app, name="miniapp")
 app.add_typer(jules_app, name="jules")
+app.add_typer(bot_app, name="bot")
 
 
 def _version_callback(value: bool) -> None:
