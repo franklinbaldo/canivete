@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -202,3 +203,113 @@ app.command("video", help="Send a video (.mp4).")(_make_captioned("sendVideo", "
 app.command("audio", help="Send an audio file (.mp3/.m4a/…) — not voice.")(
     _make_captioned("sendAudio", "audio")
 )
+
+
+@app.command("buttons", help="Send a message with an inline keyboard.")
+def send_buttons(  # noqa: C901, PLR0912, PLR0915
+    text: str | None = typer.Argument(None, help="Message text."),
+    row: list[str] | None = typer.Option(
+        None,
+        "--row",
+        help="Pairs of LABEL:CALLBACK_DATA. Separate pairs with spaces or commas. Stack multiple --row flags.",
+    ),
+    json_data: str | None = typer.Option(
+        None, "--json", help="Inline JSON representation of the payload."
+    ),
+    json_file: Path | None = typer.Option(
+        None, "--json-file", help="Path to JSON file with the payload."
+    ),
+    chat_id: str | None = typer.Option(
+        None, "--chat-id", help="Destination. Default: CRON_CHAT_ID."
+    ),
+    reply_to: int | None = typer.Option(None, "--reply-to", help="message_id to reply to."),
+):
+    opts = sum(1 for x in [text, json_data, json_file] if x)
+    if opts > 1:
+        err_console.print(
+            "[red]Validation error:[/] Provide either TEXT+--row, --json, or --json-file (mutually-exclusive)."
+        )
+        raise typer.Exit(1)
+
+    if json_file:
+        try:
+            payload = json.loads(json_file.read_text())
+        except (OSError, ValueError) as e:
+            err_console.print(f"[red]Error reading JSON file:[/] {e}")
+            raise typer.Exit(1) from e
+    elif json_data:
+        try:
+            payload = json.loads(json_data)
+        except ValueError as e:
+            err_console.print(f"[red]Error parsing JSON:[/] {e}")
+            raise typer.Exit(1) from e
+    elif text is not None:
+        if not row:
+            err_console.print(
+                "[red]Validation error:[/] Must provide at least one --row when using text argument."
+            )
+            raise typer.Exit(1)
+
+        rows = []
+        for r in row:
+            pairs = [p for p in re.split(r"[,\s]+", r) if p]
+            parsed_row = []
+            for pair in pairs:
+                if ":" not in pair:
+                    err_console.print(
+                        f"[red]Validation error:[/] Invalid button pair '{pair}'. Must be LABEL:CALLBACK_DATA."
+                    )
+                    raise typer.Exit(1)
+                label, data = pair.split(":", 1)
+                parsed_row.append({"label": label, "data": data})
+            rows.append(parsed_row)
+        payload = {"text": text, "rows": rows}
+    else:
+        err_console.print("[red]Validation error:[/] Must provide TEXT, --json, or --json-file.")
+        raise typer.Exit(1)
+
+    payload_text = payload.get("text")
+    payload_rows = payload.get("rows", [])
+
+    if not payload_text:
+        err_console.print("[red]Validation error:[/] Message text cannot be empty.")
+        raise typer.Exit(1)
+
+    if not payload_rows:
+        err_console.print(
+            "[red]Validation error:[/] The message must have at least one row of buttons."
+        )
+        raise typer.Exit(1)
+
+    inline_keyboard = []
+    for i, r in enumerate(payload_rows):
+        if not r:
+            err_console.print(f"[red]Validation error:[/] Row {i + 1} has zero buttons.")
+            raise typer.Exit(1)
+        kb_row = []
+        for btn in r:
+            label = btn.get("label", "")
+            data = btn.get("data", "")
+            if not label or not data:
+                err_console.print(
+                    "[red]Validation error:[/] Each button must have 'label' and 'data'."
+                )
+                raise typer.Exit(1)
+            if len(data.encode("utf-8")) > 64:
+                err_console.print(
+                    f"[red]Validation error:[/] callback_data '{data}' exceeds 64 bytes."
+                )
+                raise typer.Exit(1)
+            kb_row.append({"text": label, "callback_data": data})
+        inline_keyboard.append(kb_row)
+
+    # Note: Telegram API requires reply_markup to be a JSON string when sent via form-urlencoded
+    _send(
+        "sendMessage",
+        {
+            "chat_id": chat_id or _default_chat(),
+            "text": payload_text,
+            "reply_to_message_id": reply_to,
+            "reply_markup": json.dumps({"inline_keyboard": inline_keyboard}),
+        },
+    )
