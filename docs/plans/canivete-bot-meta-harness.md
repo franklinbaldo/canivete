@@ -1,10 +1,12 @@
 # Plano: `canivete bot` — meta-harness genérico
 
-**Status:** v1
+**Status:** v2 (2026-04-28 — `BackendEvent` virou discriminated union;
+unificou A→D num PR só)
 **Escopo:** transformar `canivete` em meta-harness — um único daemon
 versionado e testado que substitui os `bot.py` duplicados em
 `harnesses/gemini/` e `harnesses/claude-code/` do repo `ireneo-funes`.
-**Estimativa:** 4 PRs sequenciais, 1–2 semanas.
+**Estimativa:** um PR único cobrindo daemon + 2 backends + consumer +
+fail-fast. Um dia de Jules.
 **Dependentes:** futura padronização de qualquer agente Funes novo;
 consumer side dos PRs `tg buttons` e `tg commands` (que hoje só emitem).
 
@@ -72,18 +74,96 @@ src/canivete/
 
 ### Backend protocol
 
-```python
-from typing import Protocol, AsyncIterator
+`BackendEvent` é uma **discriminated union** sobre `kind`, não um
+`payload: dict` solto. Isso elimina o `payload.get('foo', {})` em
+toda parte e dá refactor seguro quando o stream-json de um backend
+mudar de formato.
 
-class BackendEvent(BaseModel):
-    kind: Literal["text", "tool_call", "tool_result", "thought", "error", "done"]
-    payload: dict
+```python
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Annotated, Literal, Protocol
+
+from pydantic import BaseModel, Field
+
+
+class TextEvent(BaseModel):
+    kind: Literal["text"] = "text"
+    text: str
+
+
+class ToolCallEvent(BaseModel):
+    kind: Literal["tool_call"] = "tool_call"
+    tool: str                    # ex.: "read_file" / "Read"
+    args: dict                   # opacidade limitada ao adapter
+    call_id: str | None = None
+
+
+class ToolResultEvent(BaseModel):
+    kind: Literal["tool_result"] = "tool_result"
+    call_id: str | None = None
+    ok: bool
+    output: str | None = None    # texto resumido; payloads grandes ficam fora
+
+
+class ThoughtEvent(BaseModel):
+    kind: Literal["thought"] = "thought"
+    subject: str | None = None
+    description: str | None = None
+
+
+class ErrorEvent(BaseModel):
+    kind: Literal["error"] = "error"
+    message: str
+    fatal: bool = False          # quando True, daemon aborta a sessão
+
+
+class StatsEvent(BaseModel):
+    kind: Literal["stats"] = "stats"
+    duration_ms: int | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    cached: int | None = None
+    model: str | None = None
+
+
+class DoneEvent(BaseModel):
+    kind: Literal["done"] = "done"
+    session_id: str | None = None  # backend pode informar a session que persistiu
+
+
+BackendEvent = Annotated[
+    TextEvent | ToolCallEvent | ToolResultEvent | ThoughtEvent
+    | ErrorEvent | StatsEvent | DoneEvent,
+    Field(discriminator="kind"),
+]
+
+
+class SpawnResult(BaseModel):
+    """Retorno do `spawn` — separa o stream de eventos da metadata
+    final (session_id que o backend persistiu, exit code, etc.).
+
+    O daemon consome `events` em loop e, quando o iterator termina,
+    lê os campos pós-stream pra fechar contas (cron, manifest, log)."""
+    events: AsyncIterator[BackendEvent]   # consumível 1×
+    session_id: str | None = None         # preenchido após `events` esgotar
+    exit_code: int | None = None
+
 
 class Backend(Protocol):
+    """Adapter contract for a coding-agent CLI."""
     name: str
-    def spawn(self, prompt: str, *, session_id: str | None,
-              attachments: list[Path]) -> AsyncIterator[BackendEvent]: ...
+
+    def spawn(
+        self,
+        prompt: str,
+        *,
+        session_id: str | None,
+        attachments: list[Path],
+    ) -> SpawnResult: ...
+
     def kill(self) -> None: ...
+
 
 REGISTRY: dict[str, type[Backend]] = {
     "gemini-cli": GeminiCliBackend,
@@ -93,7 +173,10 @@ REGISTRY: dict[str, type[Backend]] = {
 
 Cada adapter encapsula:
 - Como invocar a CLI (`gemini ...` vs `claude ...`).
-- Como parsear o `stream-json` do CLI em `BackendEvent`.
+- Como parsear o `stream-json` em `BackendEvent` tipado (não dict cru).
+- Como popular `SpawnResult.session_id` quando o backend criar/recuperar
+  uma sessão (gemini-cli grava em `~/.gemini/tmp/<workspace>/chats/...`;
+  claude-code idem em `~/.claude/projects/...`).
 - Como encerrar (graceful + force kill).
 
 ### Packaging
@@ -113,39 +196,31 @@ harnesses passam a usar a variante `[bot]`.
 
 ---
 
-## Sequência de PRs
+## Escopo do PR
 
-```
-PR A — bot/daemon.py + Backend protocol + GeminiCliBackend adapter
-  - Move o que hoje é bot.py-comum para canivete/bot/daemon.py
-  - Define Backend protocol e registry
-  - Implementa GeminiCliBackend
-  - Mantém ClaudeCodeBackend como TODO comentado, fora de escopo deste PR
-  - Tests BDD que cobrem o ciclo polling → spawn → render → exit, com
-    backend mockado (não invoca gemini real)
+**Um único PR** entrega A→D combinados (decisão pragmática — o Jules
+aguenta o pacote inteiro de uma vez, e fatiar geraria churn de
+sequenciamento sem ganho real de revisão):
 
-PR B — ClaudeCodeBackend
-  - Adapter completo pra claude
-  - Tests BDD comparativos com GeminiCliBackend (mesmas scenarios, backends diferentes)
-  - Diff entre bot.py legacy e canivete/bot pra Claude documentado em PR description
+1. **Daemon + protocol + GeminiCliBackend** — porta o que hoje é
+   `bot.py`-comum pra `canivete/bot/daemon.py`. Define `Backend`
+   protocol tipado, `BackendEvent` como discriminated union, registry.
+2. **ClaudeCodeBackend** — adapter completo pro `claude` Anthropic.
+   Mesmos eventos, mesma cobertura BDD do gemini.
+3. **callback_query + dynamic slash dispatch consumer** — o lado
+   receiver dos PRs `tg buttons` e `tg commands` (já merged). Quando
+   user clica botão, daemon chama `answerCallbackQuery` e injeta
+   pseudo-message no buffer. Quando user invoca slash dinâmico, idem.
+4. **Fail-fast em 429 + erro melhorado no Telegram** — detecção de
+   `RESOURCE_EXHAUSTED` / `monthly spending cap` / etc. no stderr
+   live; kill imediato do subprocess; mensagem rica no Telegram com
+   tipo do erro, trecho do stderr, sugestão acionável. Hard timeout
+   absoluto via env var (`AGENT_TIMEOUT`, default 300s).
 
-PR C — callback_query consumer + dynamic slash dispatch consumer
-  - Implementa o lado receiver dos PRs `tg buttons` e `tg commands`
-  - Quando user clica botão, daemon chama answerCallbackQuery e injeta
-    pseudo-message ([User clicked X]) no buffer do agente
-  - Quando user invoca slash dinâmico, daemon despacha pro agente
-  - Tests cobrem o round-trip emitir → render → click → consume
-
-PR D — fail-fast + erro melhorado (movido de ireneo-funes)
-  - Migra o trabalho da sessão Jules `6804685494745469640` (rate_limit
-    detection, hard timeout, Telegram error message) pro daemon novo
-  - Aproveita o Backend protocol pra detectar fatal patterns no stderr
-    de qualquer backend, não só gemini
-```
-
-Após PR D, os Dockerfiles dos 3 harnesses migram pra `canivete bot`,
-e os `bot.py` legacy ficam como shims vazios (ou são removidos).
-Migração final = PR no `ireneo-funes`, fora do escopo deste plano.
+Após esse PR mergiar, os Dockerfiles dos 3 harnesses migram pra
+`canivete bot --backend X`, e os `bot.py` legacy ficam como shims
+vazios (ou são removidos). Migração final = PR no `ireneo-funes`,
+fora do escopo deste plano.
 
 ---
 
