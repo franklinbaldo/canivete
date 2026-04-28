@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import shlex
@@ -31,6 +32,20 @@ def cron_chat_id_is_set(monkeypatch):
 def temp_html_file(tmp_path: Path) -> Path:
     f = tmp_path / "test.html"
     f.write_text("<h1>Hello World</h1>", encoding="utf-8")
+    return f
+
+
+@given("a temporary large HTML file exists", target_fixture="temp_large_html_file")
+def temp_large_html_file(tmp_path: Path) -> Path:
+    f = tmp_path / "large.html"
+    f.write_text("<h1>Large File</h1>" + ("<p>padding</p>" * 500), encoding="utf-8")
+    return f
+
+
+@given("a temporary UTF-8 HTML file exists", target_fixture="temp_utf8_html_file")
+def temp_utf8_html_file(tmp_path: Path) -> Path:
+    f = tmp_path / "utf8.html"
+    f.write_text("<h1>é 🔧 &</h1>", encoding="utf-8")
     return f
 
 
@@ -90,6 +105,12 @@ def run_miniapp_args(args: str, request, api_mocks) -> subprocess.CompletedProce
     if "<html_file>" in args:
         temp_html_file = request.getfixturevalue("temp_html_file")
         args = args.replace("<html_file>", str(temp_html_file))
+    if "<large_html_file>" in args:
+        temp_large_html_file = request.getfixturevalue("temp_large_html_file")
+        args = args.replace("<large_html_file>", str(temp_large_html_file))
+    if "<utf8_html_file>" in args:
+        temp_utf8_html_file = request.getfixturevalue("temp_utf8_html_file")
+        args = args.replace("<utf8_html_file>", str(temp_utf8_html_file))
 
     os.environ["TELEGRAM_BOT_TOKEN"] = "mocked_token:123456"
     os.environ["CRON_CHAT_ID"] = "99999999"
@@ -130,6 +151,36 @@ def tg_msg_sent(api_mocks):
     btn = reply_markup["inline_keyboard"][0][0]
     assert "web_app" in btn
     assert btn["web_app"]["url"] == "https://franklinbaldo.github.io/intuit/?gist=1234abcd"
+
+
+@then("a Telegram message was sent with a web_app button using inline base64")
+def tg_msg_sent_inline(api_mocks):
+    mock_urlopen = api_mocks["urlopen"]
+    assert mock_urlopen.called
+    req = mock_urlopen.call_args[0][0]
+
+    body = urllib.parse.parse_qs(req.data.decode())
+    reply_markup = json.loads(body["reply_markup"][0])
+
+    btn = reply_markup["inline_keyboard"][0][0]
+    assert "web_app" in btn
+    assert btn["web_app"]["url"].startswith("https://franklinbaldo.github.io/intuit/?b64=")
+
+
+@then("the payload is successfully decoded and matches UTF-8 string")
+def verify_utf8_payload(api_mocks):
+    mock_urlopen = api_mocks["urlopen"]
+    req = mock_urlopen.call_args[0][0]
+    body = urllib.parse.parse_qs(req.data.decode())
+    reply_markup = json.loads(body["reply_markup"][0])
+    url = reply_markup["inline_keyboard"][0][0]["web_app"]["url"]
+    b64_str = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["b64"][0]
+    b64_str = b64_str.replace(" ", "+")
+    missing_padding = len(b64_str) % 4
+    if missing_padding:
+        b64_str += "=" * (4 - missing_padding)
+    decoded = base64.b64decode(b64_str).decode("utf-8")
+    assert decoded == "<h1>é 🔧 &</h1>"
 
 
 @then(parsers.parse('a Telegram message was sent with a web_app button for gist "{gist_id}"'))
