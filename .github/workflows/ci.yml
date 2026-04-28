@@ -27,7 +27,7 @@ jobs:
           enable-cache: true
 
       - name: Install (uv pip)
-        run: uv pip install --system -e ".[dev]"
+        run: uv pip install --system -e ".[dev,bot]"
 
       - name: Format check (ruff format)
         run: ruff format --check .

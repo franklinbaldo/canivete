@@ -37,6 +37,7 @@ COMMANDS: list[tuple[str, str, str, str]] = [
     ("profile", "📸", "magenta", "configure the bot's Telegram identity"),
     ("miniapp", "🪟", "green", "spin up a Telegram Web App from raw HTML"),
     ("jules", "🤖", "red", "manage Jules coding sessions"),
+    ("bot", "⚙️", "white", "run the meta-harness daemon"),
 ]
 
 

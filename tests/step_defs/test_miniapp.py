@@ -91,7 +91,7 @@ def run_miniapp_args(args: str, request, api_mocks) -> subprocess.CompletedProce
         temp_html_file = request.getfixturevalue("temp_html_file")
         args = args.replace("<html_file>", str(temp_html_file))
 
-    os.environ["TELEGRAM_BOT_TOKEN"] = "mocked_token:123456"  # noqa: S105
+    os.environ["TELEGRAM_BOT_TOKEN"] = "mocked_token:123456"
     os.environ["CRON_CHAT_ID"] = "99999999"
 
     result = runner.invoke(app, shlex.split(args))

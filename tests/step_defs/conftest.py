@@ -120,7 +120,7 @@ def _invoke(args: list[str], in_process=False, mock_profile=None) -> subprocess.
             # Inherit environment since the subprocess relies on environment variables
             env = os.environ.copy()
             if "TELEGRAM_BOT_TOKEN" not in env:
-                env["TELEGRAM_BOT_TOKEN"] = "dummy"  # noqa: S105
+                env["TELEGRAM_BOT_TOKEN"] = "dummy"
 
             res = runner.invoke(app, args, env=env)
 

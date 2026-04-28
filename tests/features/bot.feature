@@ -1,0 +1,47 @@
+Feature: Bot Daemon and Adapters
+
+  Scenario: canivete bot --help lists the daemon's options
+    When I run "canivete bot --help"
+    Then the exit code is 0
+    And the output contains "Backend to use"
+
+  Scenario: Unknown backend exits non-zero with a clear error
+    When I run the bot daemon with backend "unknown-backend"
+    Then the daemon prints "Unknown backend: unknown-backend"
+    # Actually our daemon loops until killed, but in a test we can mock getUpdates to return a message that triggers the backend spawn and assert the error message.
+
+  Scenario: Daemon spawns the backend with the correct prompt
+    When a user sends "Hello agent"
+    Then the bot daemon should spawn the "gemini-cli" backend with prompt "Hello agent"
+
+  Scenario: Streaming text and done events produce editMessageText calls
+    Given the backend emits "text" and "done" events
+    When a user sends a message
+    Then the daemon calls editMessageText with the rendered events
+
+  Scenario: Fatal pattern in stderr triggers kill and posts error
+    Given the backend stderr emits "RESOURCE_EXHAUSTED"
+    When a user sends a message
+    Then the daemon immediately kills the subprocess
+    And the daemon posts an error message with suggestion for "rate_limit"
+
+  Scenario: Hard timeout fires when the backend doesn't exit
+    Given the backend process hangs for "AGENT_TIMEOUT"
+    When a user sends a message
+    Then the daemon kills the subprocess
+    And the daemon posts a timeout error message
+
+  Scenario: callback_query with data="vote_yes" results in pseudo-message
+    When a user clicks an inline button with data "vote_yes"
+    Then the daemon calls answerCallbackQuery
+    And the daemon injects a pseudo-message containing "vote_yes" into the chat worker
+
+  Scenario: Dynamic slash command produces a pseudo-message
+    When a user sends the dynamic command "/pick_2"
+    Then the daemon injects a pseudo-message containing "invoked /pick_2" into the chat worker
+    When a user sends the static command "/cancel"
+    Then the daemon does not inject a pseudo-message
+
+  Scenario: Mockable smoke assert both work
+    Given we simulate both "gemini-cli" and "claude-code"
+    Then both backends should handle basic message flow
