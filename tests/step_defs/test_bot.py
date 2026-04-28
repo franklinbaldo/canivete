@@ -233,6 +233,117 @@ def check_no_msg(test_context):
     assert test_context["stat_res"] is None
 
 
+@when("the daemon spawns a Claude backend for a new chat")
+def spawns_claude_new_chat(test_context):
+    worker = ChatWorker(chat_id=123, backend_name="claude-code")
+    with (
+        patch("subprocess.Popen") as mock_popen,
+        patch("canivete.bot.daemon.Thread"),
+        patch("canivete.bot.daemon.asyncio.create_task"),
+    ):
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+        worker.spawn_backend("Hello")
+        test_context["claude_popen_args"] = mock_popen.call_args[0][0]
+
+
+@then("it passes --session-id with a valid UUIDv7")
+def check_claude_session_id(test_context):
+    import uuid_utils
+
+    args = test_context["claude_popen_args"]
+    assert "--session-id" in args
+    idx = args.index("--session-id")
+    session_id = args[idx + 1]
+
+    # Verify it is a valid UUIDv7
+    u = uuid_utils.UUID(session_id)
+    assert u.version == 7
+
+
+@given('a chat has an active session_id "0190d5f1-4c00-7f38-b7d8-1a4c6c8e3a2d"')
+def chat_has_active_session_id(test_context):
+    test_context["active_session_id"] = "0190d5f1-4c00-7f38-b7d8-1a4c6c8e3a2d"
+
+
+@when("the daemon spawns Claude for the same chat")
+def daemon_spawns_claude_same_chat(test_context):
+    worker = ChatWorker(chat_id=123, backend_name="claude-code")
+    worker.session_id = test_context["active_session_id"]
+    worker.is_new_session = False
+
+    with (
+        patch("subprocess.Popen") as mock_popen,
+        patch("canivete.bot.daemon.Thread"),
+        patch("canivete.bot.daemon.asyncio.create_task"),
+    ):
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+        worker.spawn_backend("Hello again")
+        test_context["claude_popen_args_resume"] = mock_popen.call_args[0][0]
+
+
+@then("it passes --resume 0190d5f1-4c00-7f38-b7d8-1a4c6c8e3a2d")
+def check_claude_resume(test_context):
+    args = test_context["claude_popen_args_resume"]
+    assert "--resume" in args
+    idx = args.index("--resume")
+    assert args[idx + 1] == "0190d5f1-4c00-7f38-b7d8-1a4c6c8e3a2d"
+
+
+@when("the daemon asks Gemini backend for a new session_id")
+def daemon_asks_gemini_session_id(test_context):
+    from canivete.bot.backends import REGISTRY
+
+    backend_cls = REGISTRY.get("gemini-cli")
+    backend = backend_cls()
+    test_context["gemini_generated_id"] = backend.generate_session_id()
+
+
+@then("it returns None")
+def check_gemini_returns_none(test_context):
+    assert test_context["gemini_generated_id"] is None
+
+
+@given("a chat has session_id S1")
+def chat_has_session_id_s1(test_context):
+    worker = ChatWorker(chat_id=123, backend_name="claude-code")
+    worker.session_id = "S1"
+    worker.is_new_session = False
+    test_context["worker_s1"] = worker
+
+
+@when("user sends /new")
+def user_sends_new(test_context):
+    worker = test_context["worker_s1"]
+    with (
+        patch("canivete.bot.daemon.asyncio.create_task") as mock_task,
+        patch("canivete.bot.daemon.asyncio.to_thread") as mock_thread,
+        patch("canivete.bot.daemon.send_message") as mock_send,
+    ):
+        worker.handle_text("/new")
+        test_context["mock_thread"] = mock_thread
+
+
+@then("worker.session_id is None")
+def check_worker_session_id_is_none(test_context):
+    worker = test_context["worker_s1"]
+    assert worker.session_id is None
+
+
+@then("worker.is_new_session is True")
+def check_worker_is_new_session(test_context):
+    worker = test_context["worker_s1"]
+    assert worker.is_new_session is True
+
+
+@then('the message confirms "Anterior preservada: S1"')
+def check_message_confirms_anterior(test_context):
+    args = test_context["mock_thread"].call_args[0]
+    # args[2] is the text message passed to send_message
+    assert "Anterior preservada: `S1`" in args[2]
+
+
 @given('we simulate both "gemini-cli" and "claude-code"')
 def smoke_simulate_both(test_context):
     pass

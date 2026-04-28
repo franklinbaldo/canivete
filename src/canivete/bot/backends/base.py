@@ -79,6 +79,9 @@ class Backend(Protocol):
         session_id: str | None,
         attachments: list[Path],
         system_prompt: str | None = None,
+        is_new_session: bool = False,
     ) -> SpawnResult: ...
 
     def kill(self) -> None: ...
+
+    def generate_session_id(self) -> str | None: ...

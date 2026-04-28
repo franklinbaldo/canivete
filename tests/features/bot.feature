@@ -42,6 +42,26 @@ Feature: Bot Daemon and Adapters
     When a user sends the static command "/cancel"
     Then the daemon does not inject a pseudo-message
 
+  Scenario: ClaudeBackend gera UUIDv7 ao criar sessão nova
+    When the daemon spawns a Claude backend for a new chat
+    Then it passes --session-id with a valid UUIDv7
+
+  Scenario: ClaudeBackend usa --resume em invocação subsequente
+    Given a chat has an active session_id "0190d5f1-4c00-7f38-b7d8-1a4c6c8e3a2d"
+    When the daemon spawns Claude for the same chat
+    Then it passes --resume 0190d5f1-4c00-7f38-b7d8-1a4c6c8e3a2d
+
+  Scenario: GeminiBackend retorna None ao gerar session_id
+    When the daemon asks Gemini backend for a new session_id
+    Then it returns None
+
+  Scenario: /new command preserva session anterior
+    Given a chat has session_id S1
+    When user sends /new
+    Then worker.session_id is None
+    And worker.is_new_session is True
+    And the message confirms "Anterior preservada: S1"
+
   Scenario: Mockable smoke assert both work
     Given we simulate both "gemini-cli" and "claude-code"
     Then both backends should handle basic message flow
