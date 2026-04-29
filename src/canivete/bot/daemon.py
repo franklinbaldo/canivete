@@ -77,6 +77,10 @@ def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> 
 
 
 def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
+    # Telegram rejects empty text with HTTP 400. Skip the call entirely
+    # rather than spamming the API with edits that can never succeed.
+    if not text:
+        return
     url = _api_url("editMessageText")
     payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
     _post_json(url, payload)

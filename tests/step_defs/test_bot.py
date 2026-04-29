@@ -495,3 +495,107 @@ def check_gemini_md_write(test_context):
     gemini_md = workspace / "GEMINI.md"
     assert gemini_md.exists()
     assert gemini_md.read_text(encoding="utf-8") == "I am Aparicio"
+
+
+# ── Direct unit tests (no BDD) for the gemini-cli stream-json parser. ──
+
+
+def _drain_stream(backend):
+    """Run the async generator to completion and collect events."""
+
+    async def _run():
+        return [ev async for ev in backend._stream()]
+
+    return asyncio.run(_run())
+
+
+def _make_backend_with_lines(lines: list[str]):
+    from canivete.bot.backends.gemini_cli import GeminiCliBackend
+
+    backend = GeminiCliBackend()
+    proc = MagicMock()
+    proc.stdout.readline.side_effect = [*lines, ""]
+    backend.proc = proc
+    return backend
+
+
+def test_gemini_parser_aggregates_assistant_deltas():
+    """Real gemini-cli output: type=message with delta=true chunks, role=assistant."""
+
+    lines = [
+        '{"type":"init","session_id":"abc-123","model":"gemini-3"}\n',
+        '{"type":"message","role":"user","content":"oi"}\n',
+        '{"type":"message","role":"assistant","content":"Olá","delta":true}\n',
+        '{"type":"message","role":"assistant","content":", Franklin","delta":true}\n',
+        '{"type":"message","role":"assistant","content":"!","delta":true}\n',
+    ]
+    events = _drain_stream(_make_backend_with_lines(lines))
+    text_events = [e for e in events if isinstance(e, TextEvent)]
+    assert len(text_events) == 1
+    assert text_events[0].text == "Olá, Franklin!"
+
+
+def test_gemini_parser_handles_tool_use_and_result():
+    from canivete.bot.backends.base import ToolCallEvent, ToolResultEvent
+
+    lines = [
+        '{"type":"message","role":"assistant","content":"vou listar","delta":true}\n',
+        '{"type":"tool_use","tool_name":"glob","tool_id":"g_1","parameters":{"pattern":"*.md"}}\n',
+        '{"type":"tool_result","tool_id":"g_1","status":"success","output":"a.md"}\n',
+    ]
+    events = _drain_stream(_make_backend_with_lines(lines))
+    # text flush before tool_use, then tool_call, then tool_result
+    assert len(events) == 3
+    assert isinstance(events[0], TextEvent)
+    assert events[0].text == "vou listar"
+    assert isinstance(events[1], ToolCallEvent)
+    assert events[1].tool == "glob"
+    assert events[1].args == {"pattern": "*.md"}
+    assert events[1].call_id == "g_1"
+    assert isinstance(events[2], ToolResultEvent)
+    assert events[2].ok is True
+    assert events[2].output == "a.md"
+
+
+def test_gemini_parser_flushes_text_on_eof():
+    """No explicit done event — pending assistant text must still be yielded."""
+
+    lines = [
+        '{"type":"message","role":"assistant","content":"resposta","delta":true}\n',
+        '{"type":"message","role":"assistant","content":" final","delta":true}\n',
+    ]
+    events = _drain_stream(_make_backend_with_lines(lines))
+    assert len(events) == 1
+    assert events[0].text == "resposta final"
+
+
+def test_gemini_parser_captures_session_id_from_init():
+    lines = ['{"type":"init","session_id":"sess-xyz","model":"m"}\n']
+    backend = _make_backend_with_lines(lines)
+    _drain_stream(backend)
+    assert backend._session_id == "sess-xyz"
+
+
+def test_bot_cli_reads_canivete_bot_backend_env(monkeypatch):
+    """Compose files in the wild set CANIVETE_BOT_BACKEND, not AGENT_BACKEND."""
+
+    monkeypatch.setenv("CANIVETE_BOT_BACKEND", "claude-code")
+    monkeypatch.delenv("AGENT_BACKEND", raising=False)
+
+    with patch("canivete.bot.daemon.run_daemon") as mock_run:
+        result = runner.invoke(app, ["bot"])
+    assert result.exit_code == 0, result.stdout
+    mock_run.assert_called_once_with("claude-code")
+
+
+def test_edit_message_skips_empty_text():
+    """Empty text used to spam Telegram with HTTP 400 errors when the backend
+    produced no renderable events."""
+    from canivete.bot import daemon as d
+
+    with patch.object(d, "_post_json") as mock_post:
+        d.edit_message(123, 456, "")
+        mock_post.assert_not_called()
+
+        d.edit_message(123, 456, "hi")
+        mock_post.assert_called_once()
