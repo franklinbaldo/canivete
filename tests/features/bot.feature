@@ -106,3 +106,16 @@ Feature: Bot Daemon and Adapters
   Scenario: GeminiCliBackend writes GEMINI.md into WORKSPACE
     When I spawn GeminiCliBackend with a system prompt "I am Aparicio"
     Then it writes "I am Aparicio" to GEMINI.md in the workspace
+
+  Scenario: KiloBackend writes AGENTS.md into WORKSPACE
+    When I spawn KiloBackend with a system prompt "I am Ireneo"
+    Then it writes "I am Ireneo" to AGENTS.md in the workspace
+
+  Scenario: KiloBackend command uses --auto + --format json + positional prompt
+    When I spawn KiloBackend with prompt "Hello"
+    Then the kilo command includes "run", "--auto", "--format", "json"
+    And the kilo command ends with positional prompt "Hello"
+
+  Scenario: KiloBackend retorna None ao gerar session_id
+    When the daemon asks Kilo backend for a new session_id
+    Then it returns None
