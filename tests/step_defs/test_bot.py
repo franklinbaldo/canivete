@@ -392,13 +392,16 @@ def check_soul_tools_concat(test_context):
     assert "I have tools." in sp
 
 
-@then('the string contains "# SOUL.md" and "# TOOLS.md"')
-def check_soul_tools_headers(test_context):
+@then("each file is prefixed with a FILE: <fullpath> header, SOUL.md first")
+def check_soul_tools_headers(test_context, agent_root):
     sp = test_context["system_prompt"]
-    assert "# SOUL.md" in sp
-    assert "# TOOLS.md" in sp
-    # Ordem alfabética
-    assert sp.find("# SOUL.md") < sp.find("# TOOLS.md")
+    # Cada arquivo é prefixado por uma linha "FILE: <fullpath>" entre regras "===".
+    assert f"FILE: {agent_root / 'SOUL.md'}" in sp
+    assert f"FILE: {agent_root / 'TOOLS.md'}" in sp
+    # SOUL aparece sempre antes do resto, mesmo que ordem alfabética colocaria TOOLS depois.
+    assert sp.find(f"FILE: {agent_root / 'SOUL.md'}") < sp.find(f"FILE: {agent_root / 'TOOLS.md'}")
+    # Sanity: o cabeçalho "===" envolve a linha FILE.
+    assert "================================================================\nFILE:" in sp
 
 
 @given("an agent root with SOUL.md, CLAUDE.md, GEMINI.md, README.md, and SYSTEM.md")
@@ -599,3 +602,65 @@ def test_edit_message_skips_empty_text():
 
         d.edit_message(123, 456, "hi")
         mock_post.assert_called_once()
+
+
+def test_edit_message_skips_unchanged_text():
+    """Telegram returns HTTP 400 'message is not modified' when an edit's text
+    equals the current message text. The daemon edits on a 1s tick after
+    every event, so without dedup it spams 400s when tool_result/done events
+    follow a final text chunk with no further text changes."""
+    from canivete.bot import daemon as d
+
+    d._last_edit_text.clear()
+    with patch.object(d, "_post_json") as mock_post:
+        d.edit_message(1, 99, "hello")
+        d.edit_message(1, 99, "hello")  # same text — must skip
+        assert mock_post.call_count == 1
+
+        d.edit_message(1, 99, "hello world")  # changed — sends
+        assert mock_post.call_count == 2
+
+        d.edit_message(2, 99, "hello world")  # different chat — sends
+        assert mock_post.call_count == 3
+
+
+def test_build_system_prompt_puts_soul_first_even_when_alphabetically_late(tmp_path):
+    """Mesmo que outros nomes apareçam antes alfabeticamente, SOUL.md tem que
+    abrir o system prompt — a persona precisa fixar a voz antes de qualquer
+    instrução operacional."""
+    from canivete.bot.daemon import build_system_prompt
+
+    (tmp_path / "AGENTS.md").write_text("Agents body", encoding="utf-8")
+    (tmp_path / "IDENTITY.md").write_text("Identity body", encoding="utf-8")
+    (tmp_path / "SOUL.md").write_text("Soul body", encoding="utf-8")
+    (tmp_path / "TOOLS.md").write_text("Tools body", encoding="utf-8")
+
+    sp = build_system_prompt(tmp_path)
+
+    soul = sp.find("Soul body")
+    agents = sp.find("Agents body")
+    identity = sp.find("Identity body")
+    tools = sp.find("Tools body")
+
+    assert soul != -1
+    assert agents != -1
+    assert identity != -1
+    assert tools != -1
+    # SOUL primeiro
+    assert soul < agents
+    assert soul < identity
+    assert soul < tools
+    # Resto em ordem alfabética: AGENTS < IDENTITY < TOOLS
+    assert agents < identity < tools
+
+
+def test_build_system_prompt_includes_full_paths(tmp_path):
+    """Cada bloco precisa carregar o fullpath do arquivo no header — assim o
+    agente sabe de onde veio e pode abrir/editar via filesystem."""
+    from canivete.bot.daemon import build_system_prompt
+
+    (tmp_path / "SOUL.md").write_text("Hi.", encoding="utf-8")
+
+    sp = build_system_prompt(tmp_path)
+
+    assert f"FILE: {tmp_path / 'SOUL.md'}" in sp

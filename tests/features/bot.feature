@@ -70,7 +70,7 @@ Feature: Bot Daemon and Adapters
     Given an agent root with SOUL.md, TOOLS.md, CLAUDE.md, and README.md
     When I build the system prompt
     Then it returns a string with SOUL.md and TOOLS.md concatenated
-    And the string contains "# SOUL.md" and "# TOOLS.md"
+    And each file is prefixed with a FILE: <fullpath> header, SOUL.md first
 
   Scenario: build_system_prompt skips CLAUDE.md, GEMINI.md, README.md, and SYSTEM.md
     Given an agent root with SOUL.md, CLAUDE.md, GEMINI.md, README.md, and SYSTEM.md

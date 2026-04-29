@@ -23,19 +23,37 @@ err_console = Console(stderr=True)
 console = Console()
 
 
+_HEADER_RULE = "=" * 64
+
+
 def build_system_prompt(agent_root: Path) -> str:
-    """Concatena os .md ALL-CAPS na raiz do agent_root num único string,
-    pulando CLAUDE.md (auto-carregado pelo Claude Code da cwd), GEMINI.md
+    """Concatena os .md ALL-CAPS na raiz do agent_root num único string.
+
+    Skips: CLAUDE.md (auto-carregado pelo Claude Code da cwd), GEMINI.md
     (idem pelo gemini-cli), README.md (humano), e SYSTEM.md (gerado).
-    Ordem: alfabética por filename."""
+
+    Ordem: SOUL.md primeiro (persona define a voz antes de tudo), demais
+    em ordem alfabética. Cada arquivo é prefixado por um cabeçalho com o
+    fullpath do arquivo no container, pra que o agente saiba de onde veio
+    o conteúdo e possa abrir/editar via filesystem.
+    """
     skip = {"CLAUDE.md", "GEMINI.md", "README.md", "SYSTEM.md"}
-    chunks = []
-    for f in sorted(agent_root.glob("*.md")):
+    candidates = []
+    for f in agent_root.glob("*.md"):
         if f.name in skip:
             continue
         if f.stem != f.stem.upper():
-            continue  # não é all-caps
-        chunks.append(f"# {f.name}\n\n{f.read_text(encoding='utf-8')}\n\n---\n")
+            continue  # not ALL-CAPS — operational notes, not a manifest
+        candidates.append(f)
+
+    soul = next((f for f in candidates if f.name == "SOUL.md"), None)
+    rest = sorted((f for f in candidates if f is not soul), key=lambda p: p.name)
+    ordered = ([soul] if soul else []) + rest
+
+    chunks = []
+    for f in ordered:
+        body = f.read_text(encoding="utf-8")
+        chunks.append(f"{_HEADER_RULE}\nFILE: {f}\n{_HEADER_RULE}\n\n{body}\n")
     return "\n".join(chunks)
 
 
@@ -76,11 +94,24 @@ def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> 
     return None
 
 
+_last_edit_text: dict[tuple[int | str, int], str] = {}
+
+
 def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
     # Telegram rejects empty text with HTTP 400. Skip the call entirely
     # rather than spamming the API with edits that can never succeed.
     if not text:
         return
+    # Telegram also rejects edits where the new text equals the current
+    # text ("message is not modified"). The daemon edits on a 1s tick
+    # whenever ANY event arrives, so without this guard a stream that
+    # ends with several non-text events (tool_result → done) ends up
+    # repeating the same final edit. Track the last text we sent per
+    # message so we only call the API when something actually changed.
+    key = (chat_id, message_id)
+    if _last_edit_text.get(key) == text:
+        return
+    _last_edit_text[key] = text
     url = _api_url("editMessageText")
     payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
     _post_json(url, payload)
