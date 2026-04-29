@@ -104,6 +104,64 @@ def daemon_calls_edit(test_context):
         mock_edit.assert_called()
 
 
+@given("the backend emits no renderable events")
+def backend_emits_no_events(test_context):
+    async def mock_events():
+        if False:
+            yield  # async generator that yields nothing
+
+    test_context["empty_events"] = mock_events()
+
+
+@then(
+    'the daemon edits the placeholder with a "Backend exited without producing any output" fallback'
+)
+def daemon_edits_with_fallback(test_context):
+    worker = ChatWorker(chat_id=123, backend_name="gemini-cli")
+
+    with (
+        patch("canivete.bot.daemon.send_message", return_value=789),
+        patch("canivete.bot.daemon.edit_message") as mock_edit,
+    ):
+        from canivete.bot.backends.base import SpawnResult
+
+        spawn_res = SpawnResult(events=test_context["empty_events"], session_id=None)
+        asyncio.run(worker._consume_events(spawn_res))
+
+        mock_edit.assert_called_once()
+        args = mock_edit.call_args[0]
+        assert "Backend exited without producing any output" in args[2]
+
+
+@given("urlopen raises TimeoutError")
+def urlopen_raises_timeout(test_context):
+    test_context["timeout_exc"] = TimeoutError("The read operation timed out")
+
+
+@when("the daemon polls Telegram")
+def daemon_polls_telegram(test_context):
+    pass
+
+
+@then("_post_json returns None and logs the error")
+def post_json_handles_timeout(test_context):
+    from canivete.bot.daemon import _post_json
+
+    with (
+        patch(
+            "canivete.bot.daemon.urllib.request.urlopen",
+            side_effect=test_context["timeout_exc"],
+        ),
+        patch("canivete.bot.daemon.err_console.print") as mock_print,
+    ):
+        result = _post_json("http://example.invalid/x", {"a": 1})
+
+    assert result is None
+    mock_print.assert_called_once()
+    printed = mock_print.call_args[0][0]
+    assert "Telegram API Error" in printed
+
+
 @given('the backend stderr emits "RESOURCE_EXHAUSTED"')
 def backend_stderr_exhausted(test_context):
     pass

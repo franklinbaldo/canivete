@@ -50,7 +50,7 @@ def _post_json(url: str, payload: dict) -> dict | None:
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return json.loads(resp.read())
-    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
         err_console.print(f"[red]Telegram API Error:[/] {e}")
         return None
 
@@ -161,6 +161,7 @@ class ChatWorker:
 
         full_text = ""
         last_edit_time = 0.0
+        last_sent_text = ""
 
         try:
             async for event in spawn_res.events:
@@ -169,8 +170,9 @@ class ChatWorker:
                     full_text += rendered + "\n"
 
                     now = time.time()
-                    if now - last_edit_time > 1.0 and msg_id:
+                    if now - last_edit_time > 1.0 and msg_id and full_text != last_sent_text:
                         await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
+                        last_sent_text = full_text
                         last_edit_time = now
 
         except Exception as e:
@@ -182,8 +184,15 @@ class ChatWorker:
                 self.session_id = spawn_res.session_id
             self.is_new_session = False
 
-            if msg_id:
+            if msg_id and full_text and full_text != last_sent_text:
                 await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
+            elif msg_id and not full_text and not self.fatal_error_matched:
+                await asyncio.to_thread(
+                    edit_message,
+                    self.chat_id,
+                    msg_id,
+                    "❌ Backend exited without producing any output.",
+                )
 
             self._handle_fatal_exit()
 
