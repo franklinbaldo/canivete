@@ -4,6 +4,7 @@ import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import uuid_utils
 from pydantic import ValidationError
 
 from canivete.bot.backends.base import (
@@ -24,6 +25,9 @@ class ClaudeCodeBackend:
         self.proc: subprocess.Popen | None = None
         self._session_id: str | None = None
 
+    def generate_session_id(self) -> str | None:
+        return str(uuid_utils.uuid7())
+
     def spawn(
         self,
         prompt: str,
@@ -31,6 +35,7 @@ class ClaudeCodeBackend:
         session_id: str | None,
         attachments: list[Path],
         system_prompt: str | None = None,
+        is_new_session: bool = False,
     ) -> SpawnResult:
         cmd = [
             "claude",
@@ -43,8 +48,10 @@ class ClaudeCodeBackend:
         ]
         if system_prompt:
             cmd.extend(["--append-system-prompt", system_prompt])
-        if session_id:
-            cmd.append("--continue")
+        if session_id and is_new_session:
+            cmd.extend(["--session-id", session_id])
+        elif session_id:
+            cmd.extend(["--resume", session_id])
 
         self.proc = subprocess.Popen(
             cmd,

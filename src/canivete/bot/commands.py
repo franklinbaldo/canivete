@@ -4,7 +4,7 @@ def handle_dynamic_command(text: str, first_name: str) -> str | None:
 
     cmd = text.split(" ", maxsplit=1)[0]
 
-    static_commands = {"/cancel", "/status", "/cron", "/reset", "/config"}
+    static_commands = {"/cancel", "/status", "/cron", "/reset", "/new", "/config"}
 
     if cmd in static_commands:
         return None

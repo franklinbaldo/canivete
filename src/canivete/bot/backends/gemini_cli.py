@@ -28,6 +28,9 @@ class GeminiCliBackend:
         self.proc: subprocess.Popen | None = None
         self._session_id: str | None = None
 
+    def generate_session_id(self) -> str | None:
+        return None
+
     def spawn(
         self,
         prompt: str,
@@ -35,6 +38,7 @@ class GeminiCliBackend:
         session_id: str | None,
         attachments: list[Path],
         system_prompt: str | None = None,
+        is_new_session: bool = False,
     ) -> SpawnResult:
         if system_prompt:
             gemini_md = Path(os.environ.get("WORKSPACE", ".")) / "GEMINI.md"

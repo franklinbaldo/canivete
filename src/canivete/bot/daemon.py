@@ -88,6 +88,7 @@ class ChatWorker:
         self.backend_name = backend_name
         self.backend: Backend | None = None
         self.session_id: str | None = None
+        self.is_new_session: bool = True
         self.buffer: list[str] = []
         self.is_running = False
 
@@ -111,11 +112,15 @@ class ChatWorker:
         self.stderr_buffer.clear()
         self.start_time = time.time()
 
+        if self.session_id is None:
+            self.session_id = self.backend.generate_session_id()
+
         spawn_res = self.backend.spawn(
             prompt=prompt,
             session_id=self.session_id,
             attachments=[],
             system_prompt=SYSTEM_PROMPT,
+            is_new_session=self.is_new_session,
         )
 
         if hasattr(self.backend, "proc") and self.backend.proc.stderr:
@@ -175,6 +180,7 @@ class ChatWorker:
             self.is_running = False
             if spawn_res.session_id:
                 self.session_id = spawn_res.session_id
+            self.is_new_session = False
 
             if msg_id:
                 await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
@@ -215,9 +221,17 @@ duration: {duration}s
                 self.backend.kill()
             asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, "Cancelled."))
             return
-        if text == "/reset":
+        if text in ("/new", "/reset"):
+            old_id = self.session_id
             self.session_id = None
-            asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, "Session reset."))
+            self.is_new_session = True
+
+            msg = (
+                f"✨ Próxima mensagem abre sessão nova.\nAnterior preservada: `{old_id}`."
+                if old_id
+                else "✨ Próxima mensagem abre primeira sessão deste chat."
+            )
+            asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
             return
         if text in ("/status", "/cron", "/config"):
             asyncio.create_task(
