@@ -359,8 +359,12 @@ def daemon_asks_gemini_session_id(test_context):
 
 
 @then("it returns None")
-def check_gemini_returns_none(test_context):
-    assert test_context["gemini_generated_id"] is None
+def check_returns_none(test_context):
+    val = test_context.get(
+        "gemini_generated_id",
+        test_context.get("kilo_generated_id"),
+    )
+    assert val is None
 
 
 @given("a chat has session_id S1")
@@ -722,3 +726,78 @@ def test_build_system_prompt_includes_full_paths(tmp_path):
     sp = build_system_prompt(tmp_path)
 
     assert f"FILE: {tmp_path / 'SOUL.md'}" in sp
+
+
+# ──────── Kilo backend step defs ──────────────────────────────────────────
+
+
+@when('I spawn KiloBackend with a system prompt "I am Ireneo"')
+def spawn_kilo_with_prompt(test_context, monkeypatch, tmp_path):
+    from canivete.bot.backends.kilo import KiloBackend
+
+    workspace = tmp_path / "kilo-workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("WORKSPACE", str(workspace))
+    test_context["kilo_workspace"] = workspace
+
+    backend = KiloBackend()
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        backend.spawn(
+            "hello",
+            session_id=None,
+            attachments=[],
+            system_prompt="I am Ireneo",
+            is_new_session=True,
+        )
+
+
+@then('it writes "I am Ireneo" to AGENTS.md in the workspace')
+def check_agents_md_write(test_context):
+    workspace = test_context["kilo_workspace"]
+    agents_md = workspace / "AGENTS.md"
+    assert agents_md.exists()
+    assert agents_md.read_text(encoding="utf-8") == "I am Ireneo"
+
+
+@when('I spawn KiloBackend with prompt "Hello"')
+def spawn_kilo_simple(test_context, tmp_path, monkeypatch):
+    from canivete.bot.backends.kilo import KiloBackend
+
+    monkeypatch.setenv("WORKSPACE", str(tmp_path))
+    backend = KiloBackend()
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        backend.spawn(
+            "Hello",
+            session_id=None,
+            attachments=[],
+            is_new_session=True,
+        )
+        test_context["kilo_simple_args"] = mock_popen.call_args[0][0]
+
+
+@then('the kilo command includes "run", "--auto", "--format", "json"')
+def check_kilo_args(test_context):
+    args = test_context["kilo_simple_args"]
+    assert args[0] == "kilo"
+    assert "run" in args
+    assert "--auto" in args
+    assert "--format" in args
+    fmt_idx = args.index("--format")
+    assert args[fmt_idx + 1] == "json"
+
+
+@then('the kilo command ends with positional prompt "Hello"')
+def check_kilo_prompt_positional(test_context):
+    args = test_context["kilo_simple_args"]
+    assert args[-1] == "Hello"
+
+
+@when("the daemon asks Kilo backend for a new session_id")
+def daemon_asks_kilo_session_id(test_context):
+    from canivete.bot.backends import REGISTRY
+
+    backend_cls = REGISTRY.get("kilo")
+    backend = backend_cls()
+    test_context["kilo_generated_id"] = backend.generate_session_id()
