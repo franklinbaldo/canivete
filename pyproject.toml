@@ -135,3 +135,6 @@ ignore = [
 testpaths = ["tests"]
 addopts = "-q"
 bdd_features_base_dir = "tests/features"
+markers = [
+    "integration: integration tests",
+]
