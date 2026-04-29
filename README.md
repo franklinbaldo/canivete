@@ -86,6 +86,51 @@ The point isn't to run a job — it's to **wake the agent up later with a
 prompt** so it can act in a future turn. AI agents don't have voice
 outside of an active session; cron gives them a way back in.
 
+## 🤖 `canivete bot daemon`
+
+The `canivete bot daemon` is a Telegram bot designed to wrap CLI agent backends, replacing custom `bot.py` harnesses. It provides a robust event loop, fail-fast mechanics for quotas/errors, and timeout handling.
+
+It supports the following backends:
+- **Claude Code** (`claude-code`)
+- **Gemini CLI** (`gemini-cli`)
+
+Its core philosophy is **"history never deletes"**. Instead of resetting or wiping out context, sending `/new` creates a fresh session while preserving the old ones. The daemon constructs its system prompt dynamically from any ALL-CAPS `.md` files found in `AGENT_ROOT`.
+
+For deeper architecture context, see the [meta-harness plan](docs/plans/canivete-bot-meta-harness.md).
+
+### Environment Variables
+
+The daemon respects the following environment variables:
+
+- `TELEGRAM_BOT_TOKEN`: The token for your Telegram bot.
+- `TELEGRAM_ALLOWED_USERS`: Comma-separated list of Telegram user IDs allowed to interact with the bot.
+- `AGENT_ROOT`: Directory containing system prompts (`*.md`) and config. Defaults to `/agent-root` in containers, or `.` locally.
+- `WORKSPACE`: The working directory for the agent.
+- `AGENT_TIMEOUT`: Maximum execution time for an agent turn in seconds (default: `300`).
+- `CANIVETE_BOT_BACKEND`: The agent backend to use (`claude-code` or `gemini-cli`).
+
+### Slash Commands
+
+When chatting with the bot, the following slash commands are available:
+
+- `/cancel` — Kills the currently running subprocess.
+- `/status` — Shows uptime, active process, and queue status.
+- `/cron` — Schedules a future prompt to wake the agent.
+- `/new` — Opens a new session (preserves the old one).
+- `/config` — Dynamically edits the bot configuration.
+
+### Example Harness Dockerfile
+
+Here is a minimal `Dockerfile` to deploy an agent harness using the `canivete bot daemon`:
+
+```Dockerfile
+FROM python:3.12-slim
+RUN uv pip install --system "canivete[bot] @ git+https://github.com/franklinbaldo/canivete@main"
+ENV CANIVETE_BOT_BACKEND=claude-code
+ENV AGENT_ROOT=/agent-root
+CMD ["canivete", "bot", "daemon"]
+```
+
 ## Why "canivete"?
 
 It's the Brazilian word for *Swiss Army knife*. The repo is open-sourced
