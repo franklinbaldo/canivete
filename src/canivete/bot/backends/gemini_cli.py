@@ -62,11 +62,27 @@ class GeminiCliBackend:
 
         return SpawnResult(events=self._stream())
 
-    async def _stream(self) -> AsyncIterator[BackendEvent]:
+    async def _stream(self) -> AsyncIterator[BackendEvent]:  # noqa: PLR0915
         if not self.proc or not self.proc.stdout:
             return
 
         loop = asyncio.get_running_loop()
+        # gemini emits assistant text in many small {"delta": true} chunks.
+        # Buffer them so the daemon edits the Telegram message with whole
+        # paragraphs, not with one '\n'-glued event per token.
+        text_buffer = ""
+
+        def _flush_text():
+            nonlocal text_buffer
+            chunk = text_buffer
+            text_buffer = ""
+            if chunk:
+                try:
+                    return TextEvent(text=chunk)
+                except ValidationError:
+                    return None
+            return None
+
         while True:
             line = await loop.run_in_executor(None, self.proc.stdout.readline)
             if not line:
@@ -76,6 +92,7 @@ class GeminiCliBackend:
             if not line:
                 continue
 
+            # Pre-stream-json gemini sometimes prints chat path as plain text.
             if "/.gemini/tmp/" in line and "/chats/" in line:
                 match = re.search(r"/\.gemini/tmp/[^/]+/chats/([^.]+)\.json", line)
                 if match:
@@ -87,26 +104,95 @@ class GeminiCliBackend:
             except ValueError:
                 continue
 
-            kind = data.get("kind")
+            # gemini-cli stream-json schema uses "type", not "kind".
+            ev_type = data.get("type") or data.get("kind")
             try:
-                if kind == "text":
-                    yield TextEvent(**data)
-                elif kind == "tool_call":
-                    yield ToolCallEvent(**data)
-                elif kind == "tool_result":
-                    yield ToolResultEvent(**data)
-                elif kind == "thought":
-                    yield ThoughtEvent(**data)
-                elif kind == "error":
-                    yield ErrorEvent(**data)
-                elif kind == "stats":
-                    yield StatsEvent(**data)
-                elif kind == "done":
+                if ev_type == "init":
                     if data.get("session_id"):
                         self._session_id = data["session_id"]
-                    yield DoneEvent(**data)
+                    continue
+
+                if ev_type == "message":
+                    role = data.get("role")
+                    content = data.get("content") or ""
+                    if role != "assistant" or not content:
+                        continue
+                    if data.get("delta"):
+                        text_buffer += content
+                        continue
+                    text_buffer += content
+                    ev = _flush_text()
+                    if ev:
+                        yield ev
+                    continue
+
+                if ev_type in ("tool_use", "tool_call"):
+                    ev = _flush_text()
+                    if ev:
+                        yield ev
+                    yield ToolCallEvent(
+                        tool=data.get("tool_name") or data.get("tool") or "tool",
+                        args=data.get("parameters") or data.get("args") or {},
+                        call_id=data.get("tool_id") or data.get("call_id"),
+                    )
+                    continue
+
+                if ev_type == "tool_result":
+                    ev = _flush_text()
+                    if ev:
+                        yield ev
+                    output = data.get("output")
+                    if output is None:
+                        output = ""
+                    elif not isinstance(output, str):
+                        output = json.dumps(output)
+                    yield ToolResultEvent(
+                        call_id=data.get("tool_id") or data.get("call_id"),
+                        ok=data.get("status", "success") == "success"
+                        and not data.get("is_error", False),
+                        output=output,
+                    )
+                    continue
+
+                if ev_type == "thought":
+                    yield ThoughtEvent(
+                        subject=data.get("subject"),
+                        description=data.get("description"),
+                    )
+                    continue
+
+                if ev_type == "error":
+                    msg = data.get("message") or data.get("error") or "Unknown error"
+                    if isinstance(msg, dict):
+                        msg = msg.get("message", "Unknown error")
+                    yield ErrorEvent(message=str(msg))
+                    continue
+
+                if ev_type == "stats":
+                    yield StatsEvent(
+                        duration_ms=data.get("duration_ms"),
+                        tokens_in=data.get("tokens_in") or data.get("input_tokens"),
+                        tokens_out=data.get("tokens_out") or data.get("output_tokens"),
+                        cached=data.get("cached"),
+                        model=data.get("model"),
+                    )
+                    continue
+
+                if ev_type in ("done", "stop"):
+                    ev = _flush_text()
+                    if ev:
+                        yield ev
+                    if data.get("session_id"):
+                        self._session_id = data["session_id"]
+                    yield DoneEvent(session_id=self._session_id)
+                    continue
             except ValidationError:
                 pass
+
+        # EOF without explicit done: flush any pending assistant text.
+        ev = _flush_text()
+        if ev:
+            yield ev
 
         self.proc.wait()
 

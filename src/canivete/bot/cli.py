@@ -14,7 +14,7 @@ def bot(
     backend: str = typer.Option(
         None,
         "--backend",
-        help="Backend to use (gemini-cli or claude-code). Defaults to AGENT_BACKEND env var or gemini-cli.",
+        help="Backend to use (gemini-cli or claude-code). Defaults to CANIVETE_BOT_BACKEND or AGENT_BACKEND env var, or gemini-cli.",
     ),
 ):
     try:
@@ -27,5 +27,10 @@ def bot(
 
     from canivete.bot.daemon import run_daemon
 
-    backend_name = backend or os.environ.get("AGENT_BACKEND", "gemini-cli")
+    backend_name = (
+        backend
+        or os.environ.get("CANIVETE_BOT_BACKEND")
+        or os.environ.get("AGENT_BACKEND")
+        or "gemini-cli"
+    )
     run_daemon(backend_name)
