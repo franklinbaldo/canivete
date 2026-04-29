@@ -19,6 +19,16 @@ Feature: Bot Daemon and Adapters
     When a user sends a message
     Then the daemon calls editMessageText with the rendered events
 
+  Scenario: Backend that emits no renderable events shows a fallback message
+    Given the backend emits no renderable events
+    When a user sends a message
+    Then the daemon edits the placeholder with a "Backend exited without producing any output" fallback
+
+  Scenario: Telegram socket timeout does not crash the daemon
+    Given urlopen raises TimeoutError
+    When the daemon polls Telegram
+    Then _post_json returns None and logs the error
+
   Scenario: Fatal pattern in stderr triggers kill and posts error
     Given the backend stderr emits "RESOURCE_EXHAUSTED"
     When a user sends a message
