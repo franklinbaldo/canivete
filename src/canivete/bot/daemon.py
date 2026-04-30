@@ -89,12 +89,9 @@ def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> 
     if reply_to:
         payload["reply_to_message_id"] = reply_to
     res = _post_json(url, payload)
-
     if not res:
-        # Fallback without parse_mode if MarkdownV2 is rejected
         payload.pop("parse_mode", None)
         res = _post_json(url, payload)
-
     if res and res.get("ok"):
         return res["result"]["message_id"]
     return None
@@ -114,12 +111,8 @@ _last_edit_text: dict[tuple[int | str, int], str] = {}
 
 
 def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
-    # Telegram rejects empty text with HTTP 400. Skip the call entirely
-    # rather than spamming the API with edits that can never succeed.
     if not text:
         return
-    # Telegram also rejects edits where the new text equals the current
-    # text ("message is not modified"). The daemon edits on a 1s tick
     # whenever ANY event arrives, so without this guard a stream that
     # ends with several non-text events (tool_result → done) ends up
     # repeating the same final edit. Track the last text we sent per
@@ -129,16 +122,10 @@ def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
         return
     _last_edit_text[key] = text
     url = _api_url("editMessageText")
-    payload = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": text,
-        "parse_mode": "MarkdownV2",
-    }
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "MarkdownV2"}
 
     res = _post_json(url, payload)
     if not res:
-        # Fallback without parse_mode
         payload.pop("parse_mode", None)
         _post_json(url, payload)
 
@@ -257,13 +244,9 @@ class ChatWorker:
 
             if origin_message_id:
                 if self.fatal_error_matched:
-                    await asyncio.to_thread(
-                        set_message_reaction, self.chat_id, origin_message_id, "⚠️"
-                    )
+                    await asyncio.to_thread(set_message_reaction, self.chat_id, origin_message_id, "⚠️")
                 else:
-                    await asyncio.to_thread(
-                        set_message_reaction, self.chat_id, origin_message_id, "✅"
-                    )
+                    await asyncio.to_thread(set_message_reaction, self.chat_id, origin_message_id, "✅")
 
             self._handle_fatal_exit()
 
@@ -364,9 +347,7 @@ class Daemon:
                             await asyncio.to_thread(set_message_reaction, chat_id, message_id, "👀")
                         pseudo_msg = handle_dynamic_command(text, first_name)
                         if pseudo_msg:
-                            self.get_worker(chat_id).handle_text(
-                                pseudo_msg, origin_message_id=message_id
-                            )
+                            self.get_worker(chat_id).handle_text(pseudo_msg, origin_message_id=message_id)
                         else:
                             self.get_worker(chat_id).handle_text(text, origin_message_id=message_id)
 
@@ -376,7 +357,7 @@ class Daemon:
                     if chat_id:
                         pseudo_msg = await asyncio.to_thread(handle_callback_query, cb)
                         if pseudo_msg:
-                            self.get_worker(chat_id).handle_text(pseudo_msg)
+                            self.get_worker(chat_id).handle_text(pseudo_msg, origin_message_id=message_id)
 
             await asyncio.sleep(0.5)
 
