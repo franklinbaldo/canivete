@@ -1,0 +1,79 @@
+--- src/canivete/bot/daemon.py
++++ src/canivete/bot/daemon.py
+@@ -147,7 +147,7 @@
+         self.start_time: float = 0
+         self.timeout = int(os.environ.get("AGENT_TIMEOUT", "300"))
+
+-    def spawn_backend(self, prompt: str):
++    def spawn_backend(self, prompt: str, origin_message_id: int | None = None):
+         if self.is_running:
+             return
+
+@@ -177,9 +177,9 @@
+         thread_timeout = Thread(target=self._watch_timeout, daemon=True)
+         thread_timeout.start()
+
+-        asyncio.create_task(self._consume_events(spawn_res))
++        asyncio.create_task(self._consume_events(spawn_res, origin_message_id))
+
+     def _watch_stderr(self, stderr_pipe):
+         for line in iter(stderr_pipe.readline, ""):
+             if not line:
+                 break
+@@ -201,7 +201,7 @@
+                 return
+             time.sleep(1)
+
+-    async def _consume_events(self, spawn_res: SpawnResult):
++    async def _consume_events(self, spawn_res: SpawnResult, origin_message_id: int | None = None):
+         msg_id = send_message(self.chat_id, "⏳ *Starting...*")
+
+         full_text = ""
+@@ -238,6 +238,12 @@
+                     "❌ Backend exited without producing any output.",
+                 )
+
++            if origin_message_id:
++                if self.fatal_error_matched:
++                    await asyncio.to_thread(set_message_reaction, self.chat_id, origin_message_id, "⚠️")
++                else:
++                    await asyncio.to_thread(set_message_reaction, self.chat_id, origin_message_id, "✅")
++
+             self._handle_fatal_exit()
+
+     def _handle_fatal_exit(self):
+@@ -269,7 +275,7 @@
+ """
+             asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
+
+-    def handle_text(self, text: str):
++    def handle_text(self, text: str, origin_message_id: int | None = None):
+         if text == "/cancel":
+             if self.backend:
+                 self.backend.kill()
+@@ -295,7 +301,7 @@
+             )
+             return
+
+-        self.spawn_backend(text)
++        self.spawn_backend(text, origin_message_id=origin_message_id)
+
+
+ class Daemon:
+@@ -328,11 +334,14 @@
+                     chat_id = msg.get("chat", {}).get("id")
+                     text = msg.get("text")
+                     first_name = msg.get("from", {}).get("first_name", "User")
++                    message_id = msg.get("message_id")
+                     if chat_id and text:
++                        if message_id:
++                            await asyncio.to_thread(set_message_reaction, chat_id, message_id, "👀")
+                         pseudo_msg = handle_dynamic_command(text, first_name)
+                         if pseudo_msg:
+-                            self.get_worker(chat_id).handle_text(pseudo_msg)
++                            self.get_worker(chat_id).handle_text(pseudo_msg, origin_message_id=message_id)
+                         else:
+-                            self.get_worker(chat_id).handle_text(text)
++                            self.get_worker(chat_id).handle_text(text, origin_message_id=message_id)
+
+                 elif "callback_query" in update:
