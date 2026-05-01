@@ -85,25 +85,34 @@ def _get_updates(offset: int) -> list[dict]:
 
 def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> int | None:
     url = _api_url("sendMessage")
-    payload = {"chat_id": chat_id, "text": text}
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2"}
     if reply_to:
         payload["reply_to_message_id"] = reply_to
     res = _post_json(url, payload)
+    if not res:
+        payload.pop("parse_mode", None)
+        res = _post_json(url, payload)
     if res and res.get("ok"):
         return res["result"]["message_id"]
     return None
+
+
+def set_message_reaction(chat_id: int | str, message_id: int, emoji: str) -> None:
+    url = _api_url("setMessageReaction")
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "reaction": [{"type": "emoji", "emoji": emoji}],
+    }
+    _post_json(url, payload)
 
 
 _last_edit_text: dict[tuple[int | str, int], str] = {}
 
 
 def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
-    # Telegram rejects empty text with HTTP 400. Skip the call entirely
-    # rather than spamming the API with edits that can never succeed.
     if not text:
         return
-    # Telegram also rejects edits where the new text equals the current
-    # text ("message is not modified"). The daemon edits on a 1s tick
     # whenever ANY event arrives, so without this guard a stream that
     # ends with several non-text events (tool_result → done) ends up
     # repeating the same final edit. Track the last text we sent per
@@ -113,8 +122,12 @@ def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
         return
     _last_edit_text[key] = text
     url = _api_url("editMessageText")
-    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
-    _post_json(url, payload)
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "MarkdownV2"}
+
+    res = _post_json(url, payload)
+    if not res:
+        payload.pop("parse_mode", None)
+        _post_json(url, payload)
 
 
 class ChatWorker:
@@ -132,7 +145,7 @@ class ChatWorker:
         self.start_time: float = 0
         self.timeout = int(os.environ.get("AGENT_TIMEOUT", "300"))
 
-    def spawn_backend(self, prompt: str):
+    def spawn_backend(self, prompt: str, origin_message_id: int | None = None):
         if self.is_running:
             return
 
@@ -167,7 +180,7 @@ class ChatWorker:
         thread_timeout = Thread(target=self._watch_timeout, daemon=True)
         thread_timeout.start()
 
-        asyncio.create_task(self._consume_events(spawn_res))
+        asyncio.create_task(self._consume_events(spawn_res, origin_message_id))
 
     def _watch_stderr(self, stderr_pipe):
         for line in iter(stderr_pipe.readline, ""):
@@ -191,7 +204,7 @@ class ChatWorker:
                 return
             time.sleep(1)
 
-    async def _consume_events(self, spawn_res: SpawnResult):
+    async def _consume_events(self, spawn_res: SpawnResult, origin_message_id: int | None = None):
         msg_id = send_message(self.chat_id, "⏳ *Starting...*")
 
         full_text = ""
@@ -229,6 +242,12 @@ class ChatWorker:
                     "❌ Backend exited without producing any output.",
                 )
 
+            if origin_message_id:
+                if self.fatal_error_matched:
+                    await asyncio.to_thread(set_message_reaction, self.chat_id, origin_message_id, "⚠️")
+                else:
+                    await asyncio.to_thread(set_message_reaction, self.chat_id, origin_message_id, "✅")
+
             self._handle_fatal_exit()
 
     def _handle_fatal_exit(self):
@@ -259,7 +278,7 @@ duration: {duration}s
 """
             asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
 
-    def handle_text(self, text: str):
+    def handle_text(self, text: str, origin_message_id: int | None = None):
         if text == "/cancel":
             if self.backend:
                 self.backend.kill()
@@ -285,7 +304,7 @@ duration: {duration}s
             )
             return
 
-        self.spawn_backend(text)
+        self.spawn_backend(text, origin_message_id=origin_message_id)
 
 
 class Daemon:
@@ -298,10 +317,21 @@ class Daemon:
             self.workers[chat_id] = ChatWorker(chat_id, self.backend_name)
         return self.workers[chat_id]
 
+    def _reap_zombies(self):
+        try:
+            while True:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break
+        except ChildProcessError:
+            pass
+
     async def run(self):
         offset = 0
         console.print(f"[green]Daemon started[/] with backend: [bold]{self.backend_name}[/]")
         while True:
+            await asyncio.to_thread(self._reap_zombies)
+
             updates = await asyncio.to_thread(_get_updates, offset)
             for update in updates:
                 offset = update["update_id"] + 1
@@ -311,12 +341,15 @@ class Daemon:
                     chat_id = msg.get("chat", {}).get("id")
                     text = msg.get("text")
                     first_name = msg.get("from", {}).get("first_name", "User")
+                    message_id = msg.get("message_id")
                     if chat_id and text:
+                        if message_id:
+                            await asyncio.to_thread(set_message_reaction, chat_id, message_id, "👀")
                         pseudo_msg = handle_dynamic_command(text, first_name)
                         if pseudo_msg:
-                            self.get_worker(chat_id).handle_text(pseudo_msg)
+                            self.get_worker(chat_id).handle_text(pseudo_msg, origin_message_id=message_id)
                         else:
-                            self.get_worker(chat_id).handle_text(text)
+                            self.get_worker(chat_id).handle_text(text, origin_message_id=message_id)
 
                 elif "callback_query" in update:
                     cb = update["callback_query"]
@@ -324,7 +357,7 @@ class Daemon:
                     if chat_id:
                         pseudo_msg = await asyncio.to_thread(handle_callback_query, cb)
                         if pseudo_msg:
-                            self.get_worker(chat_id).handle_text(pseudo_msg)
+                            self.get_worker(chat_id).handle_text(pseudo_msg, origin_message_id=message_id)
 
             await asyncio.sleep(0.5)
 
