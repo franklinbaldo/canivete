@@ -358,13 +358,217 @@ def daemon_asks_gemini_session_id(test_context):
     test_context["gemini_generated_id"] = backend.generate_session_id()
 
 
+@when("the daemon asks Cursor backend for a new session_id")
+def daemon_asks_cursor_session_id(test_context):
+    from canivete.bot.backends import REGISTRY
+
+    backend_cls = REGISTRY.get("cursor")
+    backend = backend_cls()
+    test_context["cursor_generated_id"] = backend.generate_session_id()
+
+
+@when("the daemon asks Cline backend for a new session_id")
+def daemon_asks_cline_session_id(test_context):
+    from canivete.bot.backends import REGISTRY
+
+    backend_cls = REGISTRY.get("cline")
+    backend = backend_cls()
+    test_context["cline_generated_id"] = backend.generate_session_id()
+
+
+@when("the daemon asks OpenCode backend for a new session_id")
+def daemon_asks_opencode_session_id(test_context):
+    from canivete.bot.backends import REGISTRY
+
+    backend_cls = REGISTRY.get("opencode")
+    backend = backend_cls()
+    test_context["opencode_generated_id"] = backend.generate_session_id()
+
+
 @then("it returns None")
 def check_returns_none(test_context):
     val = test_context.get(
         "gemini_generated_id",
-        test_context.get("kilo_generated_id"),
+        test_context.get(
+            "kilo_generated_id",
+            test_context.get(
+                "cursor_generated_id",
+                test_context.get(
+                    "cline_generated_id",
+                    test_context.get("opencode_generated_id"),
+                ),
+            ),
+        ),
     )
     assert val is None
+
+
+# ──────── Cursor backend step defs ────────────────────────────────────────
+
+
+@when('I spawn CursorBackend with a system prompt "I am Cursor"')
+def spawn_cursor_with_prompt(test_context, monkeypatch, tmp_path):
+    from canivete.bot.backends.cursor import CursorBackend
+
+    workspace = tmp_path / "cursor-workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("WORKSPACE", str(workspace))
+    test_context["cursor_workspace"] = workspace
+
+    backend = CursorBackend()
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        backend.spawn(
+            "hello",
+            session_id=None,
+            attachments=[],
+            system_prompt="I am Cursor",
+        )
+
+
+@then('it writes "I am Cursor" to CURSOR.md in the workspace')
+def check_cursor_md_written(test_context):
+    workspace = test_context["cursor_workspace"]
+    cursor_md = workspace / "CURSOR.md"
+    assert cursor_md.exists()
+    assert cursor_md.read_text(encoding="utf-8") == "I am Cursor"
+
+
+@when('I spawn CursorBackend with prompt "Hello"')
+def spawn_cursor_simple(test_context, tmp_path, monkeypatch):
+    from canivete.bot.backends.cursor import CursorBackend
+
+    monkeypatch.setenv("WORKSPACE", str(tmp_path))
+    backend = CursorBackend()
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        backend.spawn(
+            "Hello",
+            session_id=None,
+            attachments=[],
+        )
+        test_context["cursor_simple_args"] = mock_popen.call_args[0][0]
+
+
+@then('the cursor command includes "cursor-agent", "-p", "Hello", "--output-format", "stream-json", "--force"')
+def check_cursor_command_args(test_context):
+    args = test_context["cursor_simple_args"]
+    assert "cursor-agent" in args
+    assert "-p" in args
+    assert "Hello" in args
+    assert "--output-format" in args
+    assert "stream-json" in args
+    assert "--force" in args
+
+
+# ──────── Cline backend step defs ─────────────────────────────────────────
+
+
+@when('I spawn ClineBackend with a system prompt "I am Cline"')
+def spawn_cline_with_prompt(test_context, monkeypatch, tmp_path):
+    from canivete.bot.backends.cline import ClineBackend
+
+    workspace = tmp_path / "cline-workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("WORKSPACE", str(workspace))
+    test_context["cline_workspace"] = workspace
+
+    backend = ClineBackend()
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        backend.spawn(
+            "hello",
+            session_id=None,
+            attachments=[],
+            system_prompt="I am Cline",
+        )
+
+
+@then('it writes "I am Cline" to .clinerules in the workspace')
+def check_clinerules_written(test_context):
+    workspace = test_context["cline_workspace"]
+    clinerules = workspace / ".clinerules"
+    assert clinerules.exists()
+    assert clinerules.read_text(encoding="utf-8") == "I am Cline"
+
+
+@when('I spawn ClineBackend with prompt "Hello"')
+def spawn_cline_simple(test_context, tmp_path, monkeypatch):
+    from canivete.bot.backends.cline import ClineBackend
+
+    monkeypatch.setenv("WORKSPACE", str(tmp_path))
+    backend = ClineBackend()
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        backend.spawn(
+            "Hello",
+            session_id=None,
+            attachments=[],
+        )
+        test_context["cline_simple_args"] = mock_popen.call_args[0][0]
+
+
+@then('the cline command includes "cline", "-y", "Hello"')
+def check_cline_command_args(test_context):
+    args = test_context["cline_simple_args"]
+    assert "cline" in args
+    assert "-y" in args
+    assert "Hello" in args
+
+
+# ──────── OpenCode backend step defs ──────────────────────────────────────
+
+
+@when('I spawn OpenCodeBackend with a system prompt "I am OpenCode"')
+def spawn_opencode_with_prompt(test_context, monkeypatch, tmp_path):
+    from canivete.bot.backends.opencode import OpenCodeBackend
+
+    workspace = tmp_path / "opencode-workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("WORKSPACE", str(workspace))
+    test_context["opencode_workspace"] = workspace
+
+    backend = OpenCodeBackend()
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        backend.spawn(
+            "hello",
+            session_id=None,
+            attachments=[],
+            system_prompt="I am OpenCode",
+        )
+
+
+@then('it writes "I am OpenCode" to OPENCODE.md in the workspace')
+def check_opencode_md_written(test_context):
+    workspace = test_context["opencode_workspace"]
+    opencode_md = workspace / "OPENCODE.md"
+    assert opencode_md.exists()
+    assert opencode_md.read_text(encoding="utf-8") == "I am OpenCode"
+
+
+@when('I spawn OpenCodeBackend with prompt "Hello"')
+def spawn_opencode_simple(test_context, tmp_path, monkeypatch):
+    from canivete.bot.backends.opencode import OpenCodeBackend
+
+    monkeypatch.setenv("WORKSPACE", str(tmp_path))
+    backend = OpenCodeBackend()
+    with patch("subprocess.Popen") as mock_popen:
+        mock_popen.return_value = MagicMock()
+        backend.spawn(
+            "Hello",
+            session_id=None,
+            attachments=[],
+        )
+        test_context["opencode_simple_args"] = mock_popen.call_args[0][0]
+
+
+@then('the opencode command includes "opencode", "run", "Hello"')
+def check_opencode_command_args(test_context):
+    args = test_context["opencode_simple_args"]
+    assert "opencode" in args
+    assert "run" in args
+    assert "Hello" in args
 
 
 @given("a chat has session_id S1")
