@@ -1,22 +1,12 @@
-"""Backend for Kilo Code CLI (https://kilo.ai/cli).
+"""Backend for Cursor Agent CLI.
 
-Spawns `kilo run --auto --dangerously-skip-permissions --format json ...`
+Spawns `cursor-agent -p <prompt> --output-format stream-json --force ...`
 and parses the streaming JSON output into BackendEvents.
 
-System prompt is delivered by writing it to AGENTS.md in the workspace
-(Kilo loads AGENTS.md from cwd by convention, same way gemini-cli loads
-GEMINI.md and Claude Code loads CLAUDE.md).
+System prompt is delivered by writing it to CURSOR.md in the workspace.
 
-Auth: caller must set ANTHROPIC_API_KEY (or another provider key
-matching the chosen --model) in the env. The backend doesn't inject
-credentials.
-
-Status: first cut. The exact stream-json schema emitted by `kilo run
---format json` is not documented; the parser below mirrors the
-gemini-cli one (keys: type/kind, message/role+content, tool_use,
-tool_result, thought, error, stats, done) and falls back to ignoring
-unknown event shapes. Validate against real output and tighten when
-we have a sample.
+Auth: caller must set OPENAI_API_KEY / ANTHROPIC_API_KEY (or another provider key
+matching the chosen --model) in the env. The backend doesn't inject credentials.
 """
 
 import asyncio
@@ -41,15 +31,15 @@ from canivete.bot.backends.base import (
 )
 
 
-class KiloBackend:
-    name: str = "kilo"
+class CursorBackend:
+    name: str = "cursor"
 
     def __init__(self) -> None:
         self.proc: subprocess.Popen | None = None
         self._session_id: str | None = None
 
     def generate_session_id(self) -> str | None:
-        # Kilo manages session ids internally; we control continuation via -c.
+        # Cursor manages session ids internally
         return None
 
     def spawn(
@@ -63,30 +53,25 @@ class KiloBackend:
     ) -> SpawnResult:
         workspace = Path(os.environ.get("WORKSPACE", "."))
         if system_prompt:
-            (workspace / "AGENTS.md").write_text(system_prompt, encoding="utf-8")
+            (workspace / "CURSOR.md").write_text(system_prompt, encoding="utf-8")
 
         cmd = [
-            "kilo",
-            "run",
-            "--auto",
-            "--dangerously-skip-permissions",
-            "--format",
-            "json",
-            "--dir",
-            str(workspace),
+            "cursor-agent",
+            "-p",
+            prompt,
+            "--output-format",
+            "stream-json",
+            "--force",
         ]
-        model = os.environ.get("KILO_MODEL")
+        model = os.environ.get("CURSOR_MODEL")
         if model:
             cmd.extend(["-m", model])
-        if session_id:
-            # Resume a specific session (kilo accepts session id directly).
-            cmd.extend(["-s", session_id])
-        elif not is_new_session:
-            # Continue last session implicitly.
-            cmd.append("-c")
+
+        # TODO: Investigate --resume and -c to resume sessions in cursor-agent
+        # For now, cursor-agent handles it or we just start fresh.
+
         for a in attachments:
-            cmd.extend(["-f", str(a)])
-        cmd.append(prompt)  # positional message
+            cmd.append(f"@{a}")
 
         self.proc = subprocess.Popen(
             cmd,
@@ -94,6 +79,7 @@ class KiloBackend:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            cwd=workspace,
         )
         self._session_id = None
 
