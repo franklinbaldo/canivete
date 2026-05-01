@@ -119,3 +119,39 @@ Feature: Bot Daemon and Adapters
   Scenario: KiloBackend retorna None ao gerar session_id
     When the daemon asks Kilo backend for a new session_id
     Then it returns None
+
+  Scenario: CursorBackend writes CURSOR.md into WORKSPACE
+    When I spawn CursorBackend with a system prompt "I am Cursor"
+    Then it writes "I am Cursor" to CURSOR.md in the workspace
+
+  Scenario: CursorBackend command uses cursor-agent -p --output-format stream-json --force
+    When I spawn CursorBackend with prompt "Hello"
+    Then the cursor command includes "cursor-agent", "-p", "Hello", "--output-format", "stream-json", "--force"
+
+  Scenario: CursorBackend retorna None ao gerar session_id
+    When the daemon asks Cursor backend for a new session_id
+    Then it returns None
+
+  Scenario: ClineBackend writes .clinerules into WORKSPACE
+    When I spawn ClineBackend with a system prompt "I am Cline"
+    Then it writes "I am Cline" to .clinerules in the workspace
+
+  Scenario: ClineBackend command uses cline -y
+    When I spawn ClineBackend with prompt "Hello"
+    Then the cline command includes "cline", "-y", "Hello"
+
+  Scenario: ClineBackend retorna None ao gerar session_id
+    When the daemon asks Cline backend for a new session_id
+    Then it returns None
+
+  Scenario: OpenCodeBackend writes OPENCODE.md into WORKSPACE
+    When I spawn OpenCodeBackend with a system prompt "I am OpenCode"
+    Then it writes "I am OpenCode" to OPENCODE.md in the workspace
+
+  Scenario: OpenCodeBackend command uses opencode run
+    When I spawn OpenCodeBackend with prompt "Hello"
+    Then the opencode command includes "opencode", "run", "Hello"
+
+  Scenario: OpenCodeBackend retorna None ao gerar session_id
+    When the daemon asks OpenCode backend for a new session_id
+    Then it returns None
