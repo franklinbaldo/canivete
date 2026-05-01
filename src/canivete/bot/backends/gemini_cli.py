@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from pydantic import ValidationError
+from rich.console import Console
 
 from canivete.bot.backends.base import (
     BackendEvent,
@@ -27,6 +28,7 @@ class GeminiCliBackend:
     def __init__(self) -> None:
         self.proc: subprocess.Popen | None = None
         self._session_id: str | None = None
+        self.console = Console()
 
     def generate_session_id(self) -> str | None:
         return None
@@ -45,8 +47,9 @@ class GeminiCliBackend:
             gemini_md.write_text(system_prompt, encoding="utf-8")
 
         cmd = ["gemini"]
-        if session_id:
-            cmd.extend(["--resume", session_id])
+        res_id = session_id or "latest"
+        if res_id:
+            cmd.extend(["--resume", res_id])
         cmd.extend(["--yolo", "--skip-trust", "--output-format", "stream-json", "-p", prompt])
         for a in attachments:
             cmd.append(f"@{a}")
@@ -91,6 +94,9 @@ class GeminiCliBackend:
             line = line.strip()
             if not line:
                 continue
+
+            # Log raw lines for debugging
+            self.console.print(f"[dim]Raw gemini output: {line[:120]}[/]")
 
             # Pre-stream-json gemini sometimes prints chat path as plain text.
             if "/.gemini/tmp/" in line and "/chats/" in line:
