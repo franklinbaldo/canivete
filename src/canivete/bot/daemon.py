@@ -27,16 +27,7 @@ _HEADER_RULE = "=" * 64
 
 
 def build_system_prompt(agent_root: Path) -> str:
-    """Concatena os .md ALL-CAPS na raiz do agent_root num único string.
-
-    Skips: CLAUDE.md (auto-carregado pelo Claude Code da cwd), GEMINI.md
-    (idem pelo gemini-cli), README.md (humano), e SYSTEM.md (gerado).
-
-    Ordem: SOUL.md primeiro (persona define a voz antes de tudo), demais
-    em ordem alfabética. Cada arquivo é prefixado por um cabeçalho com o
-    fullpath do arquivo no container, pra que o agente saiba de onde veio
-    o conteúdo e possa abrir/editar via filesystem.
-    """
+    """Concatena os .md ALL-CAPS na raiz do agent_root num único string."""
     skip = {"CLAUDE.md", "GEMINI.md", "README.md", "SYSTEM.md"}
     candidates = []
     for f in agent_root.glob("*.md"):
@@ -97,12 +88,13 @@ def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> 
     return None
 
 
-def set_message_reaction(chat_id: int | str, message_id: int, emoji: str) -> None:
+def set_message_reaction(chat_id: int | str, message_id: int, emoji: str | None) -> None:
     url = _api_url("setMessageReaction")
+    reaction = [{"type": "emoji", "emoji": emoji}] if emoji else []
     payload = {
         "chat_id": chat_id,
         "message_id": message_id,
-        "reaction": [{"type": "emoji", "emoji": emoji}],
+        "reaction": reaction,
     }
     _post_json(url, payload)
 
@@ -113,10 +105,6 @@ _last_edit_text: dict[tuple[int | str, int], str] = {}
 def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
     if not text:
         return
-    # whenever ANY event arrives, so without this guard a stream that
-    # ends with several non-text events (tool_result → done) ends up
-    # repeating the same final edit. Track the last text we sent per
-    # message so we only call the API when something actually changed.
     key = (chat_id, message_id)
     if _last_edit_text.get(key) == text:
         return
@@ -137,18 +125,53 @@ class ChatWorker:
         self.backend: Backend | None = None
         self.session_id: str | None = None
         self.is_new_session: bool = True
-        self.buffer: list[str] = []
+        self.queue: collections.deque[tuple[str, int | None]] = collections.deque()
         self.is_running = False
 
         self.stderr_buffer = collections.deque(maxlen=100)
         self.fatal_error_matched: tuple[str, str] | None = None
         self.start_time: float = 0
+        self.last_activity: float = 0
         self.timeout = int(os.environ.get("AGENT_TIMEOUT", "300"))
+        self.inactivity_timeout = int(os.environ.get("AGENT_INACTIVITY_TIMEOUT", "60"))
 
-    def spawn_backend(self, prompt: str, origin_message_id: int | None = None):
-        if self.is_running:
+    def handle_text(self, text: str, origin_message_id: int | None = None):
+        if text == "/cancel":
+            if self.backend:
+                self.backend.kill()
+            self.queue.clear()
+            asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, "⛔ *Cancelled.* Fila limpa."))
+            return
+        
+        if text in ("/new", "/reset"):
+            old_id = self.session_id
+            self.session_id = None
+            self.is_new_session = True
+            msg = (
+                f"✨ Próxima mensagem abre sessão nova.\nAnterior preservada: `{old_id}`."
+                if old_id else "✨ Próxima mensagem abre primeira sessão deste chat."
+            )
+            asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
             return
 
+        if text in ("/status", "/cron", "/config"):
+            asyncio.create_task(
+                asyncio.to_thread(send_message, self.chat_id, "Command not implemented in meta-harness yet.")
+            )
+            return
+
+        self.queue.append((text, origin_message_id))
+        if not self.is_running:
+            self.process_queue()
+
+    def process_queue(self):
+        if self.is_running or not self.queue:
+            return
+
+        prompt, mid = self.queue.popleft()
+        self.spawn_backend(prompt, origin_message_id=mid)
+
+    def spawn_backend(self, prompt: str, origin_message_id: int | None = None):
         backend_cls = REGISTRY.get(self.backend_name)
         if not backend_cls:
             err_console.print(f"[red]Unknown backend:[/] {self.backend_name}")
@@ -159,6 +182,7 @@ class ChatWorker:
         self.fatal_error_matched = None
         self.stderr_buffer.clear()
         self.start_time = time.time()
+        self.last_activity = self.start_time
 
         if self.session_id is None:
             self.session_id = self.backend.generate_session_id()
@@ -172,139 +196,83 @@ class ChatWorker:
         )
 
         if hasattr(self.backend, "proc") and self.backend.proc.stderr:
-            thread = Thread(
-                target=self._watch_stderr, args=(self.backend.proc.stderr,), daemon=True
-            )
-            thread.start()
+            Thread(target=self._watch_stderr, args=(self.backend.proc.stderr,), daemon=True).start()
 
-        thread_timeout = Thread(target=self._watch_timeout, daemon=True)
-        thread_timeout.start()
-
+        Thread(target=self._watch_watchdog, daemon=True).start()
         asyncio.create_task(self._consume_events(spawn_res, origin_message_id))
 
     def _watch_stderr(self, stderr_pipe):
         for line in iter(stderr_pipe.readline, ""):
-            if not line:
-                break
+            if not line: break
             self.stderr_buffer.append(line)
-
             for pattern, kind, summary in FATAL_PATTERNS:
                 if pattern.search(line):
                     self.fatal_error_matched = (kind, summary)
-                    if self.backend:
-                        self.backend.kill()
+                    if self.backend: self.backend.kill()
                     return
 
-    def _watch_timeout(self):
+    def _watch_watchdog(self):
+        """Monitor de travamento e timeout global."""
         while self.is_running:
-            if time.time() - self.start_time > self.timeout:
-                self.fatal_error_matched = ("timeout", "Subprocess hit AGENT_TIMEOUT.")
-                if self.backend:
-                    self.backend.kill()
+            now = time.time()
+            if now - self.start_time > self.timeout:
+                self.fatal_error_matched = ("timeout", f"Execution exceeded {self.timeout}s.")
+                if self.backend: self.backend.kill()
                 return
-            time.sleep(1)
+            if now - self.last_activity > self.inactivity_timeout:
+                self.fatal_error_matched = ("stuck", f"No activity for {self.inactivity_timeout}s.")
+                if self.backend: self.backend.kill()
+                return
+            time.sleep(2)
 
     async def _consume_events(self, spawn_res: SpawnResult, origin_message_id: int | None = None):
-        msg_id = send_message(self.chat_id, "⏳ *Starting...*")
-
+        msg_id = await asyncio.to_thread(send_message, self.chat_id, "⏳ *Starting...*")
         full_text = ""
         last_edit_time = 0.0
         last_sent_text = ""
 
         try:
             async for event in spawn_res.events:
+                self.last_activity = time.time()
                 rendered = render_event(event)
                 if rendered:
                     full_text += rendered + "\n"
-
                     now = time.time()
-                    if now - last_edit_time > 1.0 and msg_id and full_text != last_sent_text:
+                    if now - last_edit_time > 1.2 and msg_id and full_text != last_sent_text:
                         await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
                         last_sent_text = full_text
                         last_edit_time = now
-
         except Exception as e:
             err_console.print(f"[red]Error consuming events:[/] {e}")
-
         finally:
             self.is_running = False
-            if spawn_res.session_id:
-                self.session_id = spawn_res.session_id
+            if spawn_res.session_id: self.session_id = spawn_res.session_id
             self.is_new_session = False
 
             if msg_id and full_text and full_text != last_sent_text:
                 await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
             elif msg_id and not full_text and not self.fatal_error_matched:
-                await asyncio.to_thread(
-                    edit_message,
-                    self.chat_id,
-                    msg_id,
-                    "❌ Backend exited without producing any output.",
-                )
+                await asyncio.to_thread(edit_message, self.chat_id, msg_id, "❌ Backend silent exit.")
 
             if origin_message_id:
-                if self.fatal_error_matched:
-                    await asyncio.to_thread(set_message_reaction, self.chat_id, origin_message_id, "⚠️")
-                else:
-                    await asyncio.to_thread(set_message_reaction, self.chat_id, origin_message_id, "✅")
+                emoji = "⚠️" if self.fatal_error_matched else "✅"
+                await asyncio.to_thread(set_message_reaction, self.chat_id, origin_message_id, emoji)
 
             self._handle_fatal_exit()
+            self.process_queue()
 
     def _handle_fatal_exit(self):
-        if self.fatal_error_matched:
-            kind, summary = self.fatal_error_matched
-            suggestion = SUGGESTIONS.get(kind, "")
-
-            exit_code = "?"
-            if hasattr(self.backend, "proc") and self.backend.proc.poll() is not None:
-                exit_code = self.backend.proc.poll()
-
-            duration = int(time.time() - self.start_time)
-
-            stderr_str = "".join(list(self.stderr_buffer)[-10:])[-800:]
-
-            msg = f"""⚠️ *{summary}*
-
-exit code: {exit_code}
-duration: {duration}s
-
-── stderr (last lines) ──
-```
-{stderr_str}
-```
-
-── what to try ──
-{suggestion}
-"""
-            asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
-
-    def handle_text(self, text: str, origin_message_id: int | None = None):
-        if text == "/cancel":
-            if self.backend:
-                self.backend.kill()
-            asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, "Cancelled."))
-            return
-        if text in ("/new", "/reset"):
-            old_id = self.session_id
-            self.session_id = None
-            self.is_new_session = True
-
-            msg = (
-                f"✨ Próxima mensagem abre sessão nova.\nAnterior preservada: `{old_id}`."
-                if old_id
-                else "✨ Próxima mensagem abre primeira sessão deste chat."
-            )
-            asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
-            return
-        if text in ("/status", "/cron", "/config"):
-            asyncio.create_task(
-                asyncio.to_thread(
-                    send_message, self.chat_id, "Command not implemented in meta-harness yet."
-                )
-            )
-            return
-
-        self.spawn_backend(text, origin_message_id=origin_message_id)
+        if not self.fatal_error_matched: return
+        kind, summary = self.fatal_error_matched
+        suggestion = SUGGESTIONS.get(kind, "Tente novamente ou use /reset.")
+        exit_code = "?"
+        if hasattr(self.backend, "proc") and self.backend.proc.poll() is not None:
+            exit_code = self.backend.proc.poll()
+        
+        duration = int(time.time() - self.start_time)
+        stderr_str = "".join(list(self.stderr_buffer)[-10:])[-800:]
+        msg = f"⚠️ *{summary}*\n\nexit: {exit_code} | {duration}s\n\n── stderr ──\n```\n{stderr_str}\n```\n\n{suggestion}"
+        asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
 
 
 class Daemon:
@@ -321,50 +289,33 @@ class Daemon:
         try:
             while True:
                 pid, _ = os.waitpid(-1, os.WNOHANG)
-                if pid == 0:
-                    break
-        except ChildProcessError:
-            pass
+                if pid == 0: break
+        except ChildProcessError: pass
 
     async def run(self):
         offset = 0
         console.print(f"[green]Daemon started[/] with backend: [bold]{self.backend_name}[/]")
         while True:
             await asyncio.to_thread(self._reap_zombies)
-
             updates = await asyncio.to_thread(_get_updates, offset)
             for update in updates:
                 offset = update["update_id"] + 1
-
                 if "message" in update:
-                    msg = update["message"]
-                    chat_id = msg.get("chat", {}).get("id")
-                    text = msg.get("text")
-                    first_name = msg.get("from", {}).get("first_name", "User")
+                    msg = update["message"]; chat_id = msg.get("chat", {}).get("id")
+                    text = msg.get("text"); first_name = msg.get("from", {}).get("first_name", "User")
                     message_id = msg.get("message_id")
                     if chat_id and text:
-                        if message_id:
-                            await asyncio.to_thread(set_message_reaction, chat_id, message_id, "👀")
-                        pseudo_msg = handle_dynamic_command(text, first_name)
-                        if pseudo_msg:
-                            self.get_worker(chat_id).handle_text(pseudo_msg, origin_message_id=message_id)
-                        else:
-                            self.get_worker(chat_id).handle_text(text, origin_message_id=message_id)
-
+                        if message_id: await asyncio.to_thread(set_message_reaction, chat_id, message_id, "👀")
+                        pseudo = handle_dynamic_command(text, first_name)
+                        self.get_worker(chat_id).handle_text(pseudo or text, origin_message_id=message_id)
                 elif "callback_query" in update:
-                    cb = update["callback_query"]
-                    chat_id = cb.get("message", {}).get("chat", {}).get("id")
+                    cb = update["callback_query"]; chat_id = cb.get("message", {}).get("chat", {}).get("id")
                     if chat_id:
-                        pseudo_msg = await asyncio.to_thread(handle_callback_query, cb)
-                        if pseudo_msg:
-                            self.get_worker(chat_id).handle_text(pseudo_msg, origin_message_id=message_id)
-
+                        pseudo = await asyncio.to_thread(handle_callback_query, cb)
+                        if pseudo: self.get_worker(chat_id).handle_text(pseudo, origin_message_id=cb.get("message", {}).get("message_id"))
             await asyncio.sleep(0.5)
-
 
 def run_daemon(backend_name: str):
     daemon = Daemon(backend_name)
-    try:
-        asyncio.run(daemon.run())
-    except KeyboardInterrupt:
-        console.print("[yellow]Daemon stopped.[/]")
+    try: asyncio.run(daemon.run())
+    except KeyboardInterrupt: console.print("[yellow]Stopped.[/]")
