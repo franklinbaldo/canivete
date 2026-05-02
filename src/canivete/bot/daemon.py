@@ -25,7 +25,6 @@ from canivete.bot.media import (
     persist_to_inbound,
     transcribe_audio,
 )
-from canivete.bot.render import render_event
 from canivete.tg import _api_url
 
 err_console = Console(stderr=True)
@@ -267,6 +266,8 @@ def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> 
     payload = {"chat_id": chat_id, "text": text}
     if reply_to:
         payload["reply_to_message_id"] = reply_to
+
+    log.info("Sending message to %s (reply_to=%s): %s", chat_id, reply_to, text[:50])
     res = _post_json(url, payload)
     if res and res.get("ok"):
         return res["result"]["message_id"]
@@ -401,18 +402,17 @@ class ChatWorker:
             return
 
         console.print(f"[cyan]Spawning backend {self.backend_name} for chat {self.chat_id}...[/]")
-        
+
         asyncio.create_task(self._run_with_fallbacks(prompt, backend_cls, mid=mid))
 
     async def _run_with_fallbacks(self, prompt: str, backend_cls: type[Backend], mid: int | None = None):
         tried = set()
-        started_at_total = time.monotonic()
-        
+
         while True:
             model = config.get_next_available_model(skip=tried)
             if model:
                 tried.add(model)
-            
+
             self.backend = backend_cls()
             self.is_running = True
             self.fatal_error_matched = None
@@ -463,7 +463,7 @@ class ChatWorker:
 
             # Timeout check handled within _consume_events for asyncio consistency
             await self._consume_events(spawn_res, mid=mid)
-            
+
             # Check for 429 retry
             if self.fatal_error_matched and self.fatal_error_matched[0] == "429":
                 config.mark_model_cooldown(model)
@@ -471,12 +471,13 @@ class ChatWorker:
                 if nxt:
                     await asyncio.to_thread(send_message, self.chat_id, f"⏳ Rate limit in {model or 'default'}. Switching to {nxt}...")
                     continue
-            
+
             break # Success or non-retryable error
 
     def _watch_stderr(self, stderr_pipe):
         for line in iter(stderr_pipe.readline, ""):
-            if not line: break
+            if not line:
+                break
             self.stderr_buffer.append(line)
             for pattern, kind, summary in FATAL_PATTERNS:
                 if pattern.search(line):
@@ -500,7 +501,8 @@ class ChatWorker:
             nonlocal text_buffer, first_text, msg_id
             chunk = text_buffer.strip()
             text_buffer = ""
-            if not chunk: return
+            if not chunk:
+                return
             if config.BOT_MODE == "burst":
                 reply = mid if first_text else None
                 msg_id = await asyncio.to_thread(send_message, self.chat_id, chunk, reply_to=reply)
@@ -531,10 +533,10 @@ class ChatWorker:
                         if now - last_edit_time > 1.0 and msg_id:
                             await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
                             last_edit_time = now
-                    
+
                     async with _live_status_lock:
                         _live_status["texts_sent"] += 1
-                
+
                 elif event.kind == "tool_call":
                     await flush_buffer()
                     status_update["current_tool"] = _short_tool(event.tool, event.args)
@@ -542,11 +544,11 @@ class ChatWorker:
                         _live_status["tools_total"] += 1
                     if config.BOT_MODE == "burst":
                         await asyncio.to_thread(send_message, self.chat_id, f"🔧 `{event.tool}`")
-                
+
                 elif event.kind == "tool_result":
                     async with _live_status_lock:
                         _live_status["tools_done"] += 1
-                
+
                 elif event.kind == "thought":
                     async with _live_status_lock:
                         _live_status["thoughts"] += 1
@@ -555,7 +557,9 @@ class ChatWorker:
                     await update_live_status(**status_update)
 
             await flush_buffer()
-
+        except Exception as e:
+            log.exception("Error in _consume_events loop")
+            await asyncio.to_thread(send_message, self.chat_id, f"❌ Internal Error: {e}")
         finally:
             self.is_running = False
             duration = time.monotonic() - self.start_time
@@ -564,10 +568,10 @@ class ChatWorker:
             self.backend_sessions[self.backend_name] = self.session_id
             self.pending_new_session[self.backend_name] = False
             self.is_new_session = False
-            
+
             if config.BOT_MODE == "streaming" and msg_id:
                 await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text or "🏁 Done.")
-            
+
             workspace = Path(config.WORKSPACE)
             _append_shared_context(
                 workspace,
@@ -600,7 +604,7 @@ class ChatWorker:
                 self.backend.kill()
             asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, f"Stop signal sent ({text})."))
             return
-        if text.startswith("/backend") or text.startswith("/harness"):
+        if text.startswith(("/backend", "/harness")):
             parts = text.split(maxsplit=1)
             if len(parts) == 1:
                 asyncio.create_task(
@@ -630,7 +634,7 @@ class ChatWorker:
                     )
                 )
             return
-        if text.startswith("/spawn") or text.startswith("/fork"):
+        if text.startswith(("/spawn", "/fork")):
             parts = text.split(maxsplit=2)
             if len(parts) < 2:
                 asyncio.create_task(
@@ -697,7 +701,7 @@ class ChatWorker:
         await asyncio.to_thread(send_message, self.chat_id, "♻️ *Reloading daemon...*")
         await asyncio.sleep(1)
         import sys
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        os.execv(sys.executable, [sys.executable, *sys.argv])
 
     async def _do_update(self):
         await asyncio.to_thread(send_message, self.chat_id, "⏳ *Updating canivete via uv...*")
@@ -708,7 +712,7 @@ class ChatWorker:
             await asyncio.to_thread(send_message, self.chat_id, "✅ *Update successful. Reloading...*")
             await asyncio.sleep(1)
             import sys
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            os.execv(sys.executable, [sys.executable, *sys.argv])
         else:
             err = stderr.decode().strip() or stdout.decode().strip()
             await asyncio.to_thread(send_message, self.chat_id, f"❌ *Update failed:*\n```\n{err[:500]}\n```")
@@ -727,7 +731,7 @@ class Daemon:
     async def run(self):
         offset = 0
         console.print(f"[green]Daemon started[/] with backend: [bold]{self.backend_name}[/]")
-        
+
         # Registra comandos e inicia ticker
         await update_live_status()
         asyncio.create_task(_status_ticker_loop())
@@ -747,7 +751,7 @@ class Daemon:
                         if config.ALLOWED_USERS and str(chat_id) not in config.ALLOWED_USERS:
                             console.print(f"[red]Unauthorized user attempt:[/] {first_name} ({chat_id})")
                             continue
-                        
+
                         mid = msg.get("message_id")
                         console.print(f"[blue]Received message from {first_name} ({chat_id}):[/] {text[:50]}")
                         pseudo_msg = handle_dynamic_command(text, first_name)

@@ -6,7 +6,6 @@ import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from pydantic import ValidationError
 from rich.console import Console
 
 from canivete.bot.backends.base import (
@@ -172,6 +171,9 @@ class GeminiCliBackend:
                 continue
 
             if ev_type == "stats":
+                ev = _flush_text()
+                if ev:
+                    yield ev
                 yield StatsEvent(
                     duration_ms=data.get("duration_ms"),
                     tokens_in=data.get("tokens_in") or data.get("input_tokens"),
@@ -181,13 +183,14 @@ class GeminiCliBackend:
                 )
                 continue
 
-            if ev_type in ("done", "stop"):
+            if ev_type in ("done", "stop", "result"):
                 ev = _flush_text()
                 if ev:
                     yield ev
                 if data.get("session_id"):
                     self._session_id = data["session_id"]
-                yield DoneEvent(session_id=self._session_id)
+                if ev_type != "result":
+                    yield DoneEvent(session_id=self._session_id)
                 continue
 
         # EOF without explicit done: flush any pending assistant text.

@@ -11,7 +11,6 @@ from pathlib import Path
 
 from canivete.tg import _api_url, _token
 
-
 _MIME_EXT_OVERRIDE = {
     "audio/ogg": ".ogg",
     "audio/mpeg": ".mp3",
@@ -58,7 +57,7 @@ def download_telegram_file(file_id: str, suffix: str = ".bin") -> Path | None:
 def persist_to_inbound(tmp_path: Path, suffix: str) -> Path:
     inbound = Path(os.environ.get("WORKSPACE", ".")) / "media" / "inbound"
     inbound.mkdir(parents=True, exist_ok=True)
-    ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H%M%S")
+    ts = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H%M%S")
     dst = inbound / f"{ts}---{uuid.uuid4().hex[:8]}{suffix}"
     shutil.move(str(tmp_path), dst)
     return dst
