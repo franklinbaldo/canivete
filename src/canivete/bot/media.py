@@ -86,10 +86,16 @@ def _whisper_request(url: str, model: str, audio_bytes: bytes, filename: str, mi
     ).encode()
     body += audio_bytes
     body += f"\r\n--{boundary}--\r\n".encode()
+
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    api_key = os.environ.get("WHISPER_API_KEY") or os.environ.get("LITELLM_MASTER_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
     req = urllib.request.Request(
         f"{url.rstrip('/')}/v1/audio/transcriptions",
         data=bytes(body),
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        headers=headers,
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return (json.loads(resp.read()).get("text") or "").strip() or None

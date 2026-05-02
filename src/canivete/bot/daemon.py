@@ -753,32 +753,35 @@ class Daemon:
             updates = await asyncio.to_thread(_get_updates, offset)
             for update in updates:
                 offset = update["update_id"] + 1
-                if "message" in update:
-                    msg = update["message"]
-                    chat_id = msg.get("chat", {}).get("id")
-                    first_name = msg.get("from", {}).get("first_name", "User")
-                    text = msg.get("text") or _message_text_from_media(msg, first_name)
-                    if chat_id and text:
-                        # Auth check
-                        if config.ALLOWED_USERS and str(chat_id) not in config.ALLOWED_USERS:
-                            console.print(f"[red]Unauthorized user attempt:[/] {first_name} ({chat_id})")
-                            continue
+                try:
+                    if "message" in update:
+                        msg = update["message"]
+                        chat_id = msg.get("chat", {}).get("id")
+                        first_name = msg.get("from", {}).get("first_name", "User")
+                        text = msg.get("text") or _message_text_from_media(msg, first_name)
+                        if chat_id and text:
+                            # Auth check
+                            if config.ALLOWED_USERS and str(chat_id) not in config.ALLOWED_USERS:
+                                console.print(f"[red]Unauthorized user attempt:[/] {first_name} ({chat_id})")
+                                continue
 
-                        mid = msg.get("message_id")
-                        console.print(f"[blue]Received message from {first_name} ({chat_id}):[/] {text[:50]}")
-                        pseudo_msg = handle_dynamic_command(text, first_name)
-                        self.get_worker(chat_id).handle_text(pseudo_msg or text, mid=mid)
-                elif "callback_query" in update:
-                    cb = update["callback_query"]
-                    chat_id = cb.get("message", {}).get("chat", {}).get("id")
-                    if chat_id:
-                        if config.ALLOWED_USERS and str(chat_id) not in config.ALLOWED_USERS:
-                            continue
-                        mid = cb.get("message", {}).get("message_id")
-                        pseudo_msg = await asyncio.to_thread(handle_callback_query, cb)
-                        if pseudo_msg:
-                            self.get_worker(chat_id).handle_text(pseudo_msg, mid=mid)
-
+                            mid = msg.get("message_id")
+                            console.print(f"[blue]Received message from {first_name} ({chat_id}):[/] {text[:50]}")
+                            pseudo_msg = handle_dynamic_command(text, first_name)
+                            self.get_worker(chat_id).handle_text(pseudo_msg or text, mid=mid)
+                    elif "callback_query" in update:
+                        cb = update["callback_query"]
+                        chat_id = cb.get("message", {}).get("chat", {}).get("id")
+                        if chat_id:
+                            if config.ALLOWED_USERS and str(chat_id) not in config.ALLOWED_USERS:
+                                continue
+                            mid = cb.get("message", {}).get("message_id")
+                            pseudo_msg = await asyncio.to_thread(handle_callback_query, cb)
+                            if pseudo_msg:
+                                self.get_worker(chat_id).handle_text(pseudo_msg, mid=mid)
+                except Exception as e:
+                    log.exception("Error processing update")
+                    console.print(f"[bold red]Error processing update:[/] {e}")
             await asyncio.sleep(0.5)
 
 
