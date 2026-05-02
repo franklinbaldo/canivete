@@ -19,10 +19,7 @@ def handle_callback_query(query: dict[str, Any]) -> str | None:
         return None
 
     url_answer = _api_url("answerCallbackQuery")
-    try:
-        _post_json(url_answer, {"callback_query_id": query_id})
-    except Exception:
-        pass
+    _post_json(url_answer, {"callback_query_id": query_id})
 
     message = query.get("message")
     if message:
@@ -30,17 +27,14 @@ def handle_callback_query(query: dict[str, Any]) -> str | None:
         message_id = message.get("message_id")
         if chat_id and message_id:
             url_edit = _api_url("editMessageReplyMarkup")
-            try:
-                _post_json(
-                    url_edit,
-                    {
-                        "chat_id": chat_id,
-                        "message_id": message_id,
-                        "reply_markup": {"inline_keyboard": []},
-                    },
-                )
-            except Exception:
-                pass
+            _post_json(
+                url_edit,
+                {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "reply_markup": {"inline_keyboard": []},
+                },
+            )
 
     data = query.get("data", "")
     from_user = query.get("from", {})

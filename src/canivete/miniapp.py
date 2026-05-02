@@ -30,16 +30,12 @@ app = typer.Typer(
 
 def _create_gist(filepath: Path) -> str:
     """Use `gh` to create a public gist and return the gist ID."""
-    try:
-        result = subprocess.run(
-            ["gh", "gist", "create", "--public", str(filepath)],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        err_console.print(f"[red]Failed to create Gist using `gh` CLI:[/] {e.stderr}")
-        raise typer.Exit(1) from e
+    result = subprocess.run(
+        ["gh", "gist", "create", "--public", str(filepath)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
     url = result.stdout.strip()
     # Extract ID from gist URL: e.g. https://gist.github.com/franklinbaldo/1234abcd
@@ -155,14 +151,7 @@ def miniapp_send(  # noqa: C901, PLR0912, PLR0915
         payload["reply_to_message_id"] = reply_to
 
     url = _api_url("sendMessage")
-    try:
-        result = _post_form(url, payload)
-    except urllib.error.HTTPError as e:
-        err_console.print(f"[red]HTTP {e.code}:[/] {e.read().decode(errors='replace')}")
-        raise typer.Exit(1) from e
-    except (urllib.error.URLError, OSError) as e:
-        err_console.print(f"[red]Network error:[/] {e}")
-        raise typer.Exit(1) from e
+    result = _post_form(url, payload)
 
     if not result.get("ok"):
         err_console.print(f"[red]Telegram returned not-ok:[/] {result}")

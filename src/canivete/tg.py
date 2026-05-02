@@ -104,14 +104,7 @@ def _post_multipart(url: str, fields: dict, files: dict) -> dict:
 
 def _send(method: str, fields: dict, files: dict | None = None) -> None:
     url = _api_url(method)
-    try:
-        result = _post_multipart(url, fields, files) if files else _post_form(url, fields)
-    except urllib.error.HTTPError as e:
-        err_console.print(f"[red]HTTP {e.code}:[/] {e.read().decode(errors='replace')}")
-        raise typer.Exit(1) from e
-    except (urllib.error.URLError, OSError) as e:
-        err_console.print(f"[red]Network error:[/] {e}")
-        raise typer.Exit(1) from e
+    result = _post_multipart(url, fields, files) if files else _post_form(url, fields)
     if not result.get("ok"):
         err_console.print(f"[red]Telegram returned not-ok:[/] {result}")
         raise typer.Exit(1)
@@ -232,17 +225,9 @@ def send_buttons(  # noqa: C901, PLR0912, PLR0915
         raise typer.Exit(1)
 
     if json_file:
-        try:
-            payload = json.loads(json_file.read_text())
-        except (OSError, ValueError) as e:
-            err_console.print(f"[red]Error reading JSON file:[/] {e}")
-            raise typer.Exit(1) from e
+        payload = json.loads(json_file.read_text())
     elif json_data:
-        try:
-            payload = json.loads(json_data)
-        except ValueError as e:
-            err_console.print(f"[red]Error parsing JSON:[/] {e}")
-            raise typer.Exit(1) from e
+        payload = json.loads(json_data)
     elif text is not None:
         if not row:
             err_console.print(
@@ -362,14 +347,7 @@ def _call_telegram(method: str, fields: dict) -> dict:
     parsed response so the caller can inspect `result` (which may be
     a bool, list, or object depending on the method)."""
     url = _api_url(method)
-    try:
-        return _post_form(url, fields)
-    except urllib.error.HTTPError as e:
-        err_console.print(f"[red]HTTP {e.code}:[/] {e.read().decode(errors='replace')}")
-        raise typer.Exit(1) from e
-    except (urllib.error.URLError, OSError) as e:
-        err_console.print(f"[red]Network error:[/] {e}")
-        raise typer.Exit(1) from e
+    return _post_form(url, fields)
 
 
 @commands_app.command("set", help="Publish chat-scoped slash commands.")

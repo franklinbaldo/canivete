@@ -95,6 +95,7 @@ It supports the following backends:
 - **Gemini CLI** (`gemini-cli`)
 
 Its core philosophy is **"history never deletes"**. Instead of resetting or wiping out context, sending `/new` creates a fresh session while preserving the old ones. The daemon constructs its system prompt dynamically from any ALL-CAPS `.md` files found in `AGENT_ROOT`.
+It also keeps a shared workspace context file in `WORKSPACE/.canivete/context.md`, so `/spawn` can move the same agent into another harness without losing the operating context.
 
 For deeper architecture context, see the [meta-harness plan](docs/plans/canivete-bot-meta-harness.md).
 
@@ -117,6 +118,8 @@ When chatting with the bot, the following slash commands are available:
 - `/status` — Shows uptime, active process, and queue status.
 - `/cron` — Schedules a future prompt to wake the agent.
 - `/new` — Opens a new session (preserves the old one).
+- `/backend` — Shows or changes the active harness for the chat.
+- `/spawn` — Switches harness and forwards the rest of the message as the next prompt.
 - `/config` — Dynamically edits the bot configuration.
 
 ### Example Harness Dockerfile

@@ -664,3 +664,64 @@ def test_build_system_prompt_includes_full_paths(tmp_path):
     sp = build_system_prompt(tmp_path)
 
     assert f"FILE: {tmp_path / 'SOUL.md'}" in sp
+
+
+def test_build_system_prompt_includes_shared_workspace_context(tmp_path):
+    from canivete.bot.daemon import build_system_prompt
+
+    agent_root = tmp_path / "agent_root"
+    workspace = tmp_path / "workspace"
+    agent_root.mkdir()
+    workspace.mkdir()
+    (agent_root / "SOUL.md").write_text("Hi.", encoding="utf-8")
+    shared = workspace / ".canivete" / "context.md"
+    shared.parent.mkdir(parents=True)
+    shared.write_text("Previous turn from gemini.", encoding="utf-8")
+
+    sp = build_system_prompt(agent_root, workspace)
+
+    assert "Previous turn from gemini." in sp
+    assert f"FILE: {shared}" in sp
+
+
+def test_spawn_can_switch_backend_and_preserve_previous_session(tmp_path, monkeypatch):
+    from canivete.bot.daemon import ChatWorker
+
+    agent_root = tmp_path / "agent_root"
+    workspace = tmp_path / "workspace"
+    agent_root.mkdir()
+    workspace.mkdir()
+    (agent_root / "SOUL.md").write_text("Hi.", encoding="utf-8")
+    monkeypatch.setenv("AGENT_ROOT", str(agent_root))
+    monkeypatch.setenv("WORKSPACE", str(workspace))
+
+    worker = ChatWorker(chat_id=123, backend_name="gemini-cli")
+    worker.session_id = "S1"
+    worker.is_new_session = False
+    worker.backend_sessions["gemini-cli"] = "S1"
+
+    with (
+        patch("subprocess.Popen") as mock_popen,
+        patch("canivete.bot.daemon.Thread"),
+        patch("canivete.bot.daemon.asyncio.create_task"),
+    ):
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+        worker.handle_text("/spawn claude-code refatora isso")
+
+    assert worker.backend_name == "claude-code"
+    assert worker.last_session_id == "S1"
+    assert worker.backend_sessions["gemini-cli"] == "S1"
+    assert (workspace / "SYSTEM.md").exists()
+    args = mock_popen.call_args[0][0]
+    assert args[0] == "claude"
+    assert "-p" in args
+    assert "refatora isso" in args
+
+
+def test_dynamic_command_filter_treats_harness_commands_as_static():
+    from canivete.bot.commands import handle_dynamic_command
+
+    assert handle_dynamic_command("/spawn claude-code", "Frank") is None
+    assert handle_dynamic_command("/backend gemini-cli", "Frank") is None
+    assert handle_dynamic_command("/harness", "Frank") is None

@@ -80,10 +80,7 @@ class GeminiCliBackend:
             chunk = text_buffer
             text_buffer = ""
             if chunk:
-                try:
-                    return TextEvent(text=chunk)
-                except ValidationError:
-                    return None
+                return TextEvent(text=chunk)
             return None
 
         while True:
@@ -105,95 +102,89 @@ class GeminiCliBackend:
                     self._session_id = match.group(1)
                 continue
 
-            try:
-                data = json.loads(line)
-            except ValueError:
-                continue
+            data = json.loads(line)
 
             # gemini-cli stream-json schema uses "type", not "kind".
             ev_type = data.get("type") or data.get("kind")
-            try:
-                if ev_type == "init":
-                    if data.get("session_id"):
-                        self._session_id = data["session_id"]
-                    continue
+            if ev_type == "init":
+                if data.get("session_id"):
+                    self._session_id = data["session_id"]
+                continue
 
-                if ev_type == "message":
-                    role = data.get("role")
-                    content = data.get("content") or ""
-                    if role != "assistant" or not content:
-                        continue
-                    if data.get("delta"):
-                        text_buffer += content
-                        continue
+            if ev_type == "message":
+                role = data.get("role")
+                content = data.get("content") or ""
+                if role != "assistant" or not content:
+                    continue
+                if data.get("delta"):
                     text_buffer += content
-                    ev = _flush_text()
-                    if ev:
-                        yield ev
                     continue
+                text_buffer += content
+                ev = _flush_text()
+                if ev:
+                    yield ev
+                continue
 
-                if ev_type in ("tool_use", "tool_call"):
-                    ev = _flush_text()
-                    if ev:
-                        yield ev
-                    yield ToolCallEvent(
-                        tool=data.get("tool_name") or data.get("tool") or "tool",
-                        args=data.get("parameters") or data.get("args") or {},
-                        call_id=data.get("tool_id") or data.get("call_id"),
-                    )
-                    continue
+            if ev_type in ("tool_use", "tool_call"):
+                ev = _flush_text()
+                if ev:
+                    yield ev
+                yield ToolCallEvent(
+                    tool=data.get("tool_name") or data.get("tool") or "tool",
+                    args=data.get("parameters") or data.get("args") or {},
+                    call_id=data.get("tool_id") or data.get("call_id"),
+                )
+                continue
 
-                if ev_type == "tool_result":
-                    ev = _flush_text()
-                    if ev:
-                        yield ev
-                    output = data.get("output")
-                    if output is None:
-                        output = ""
-                    elif not isinstance(output, str):
-                        output = json.dumps(output)
-                    yield ToolResultEvent(
-                        call_id=data.get("tool_id") or data.get("call_id"),
-                        ok=data.get("status", "success") == "success"
-                        and not data.get("is_error", False),
-                        output=output,
-                    )
-                    continue
+            if ev_type == "tool_result":
+                ev = _flush_text()
+                if ev:
+                    yield ev
+                output = data.get("output")
+                if output is None:
+                    output = ""
+                elif not isinstance(output, str):
+                    output = json.dumps(output)
+                yield ToolResultEvent(
+                    call_id=data.get("tool_id") or data.get("call_id"),
+                    ok=data.get("status", "success") == "success"
+                    and not data.get("is_error", False),
+                    output=output,
+                )
+                continue
 
-                if ev_type == "thought":
-                    yield ThoughtEvent(
-                        subject=data.get("subject"),
-                        description=data.get("description"),
-                    )
-                    continue
+            if ev_type == "thought":
+                yield ThoughtEvent(
+                    subject=data.get("subject"),
+                    description=data.get("description"),
+                )
+                continue
 
-                if ev_type == "error":
-                    msg = data.get("message") or data.get("error") or "Unknown error"
-                    if isinstance(msg, dict):
-                        msg = msg.get("message", "Unknown error")
-                    yield ErrorEvent(message=str(msg))
-                    continue
+            if ev_type == "error":
+                msg = data.get("message") or data.get("error") or "Unknown error"
+                if isinstance(msg, dict):
+                    msg = msg.get("message", "Unknown error")
+                yield ErrorEvent(message=str(msg))
+                continue
 
-                if ev_type == "stats":
-                    yield StatsEvent(
-                        duration_ms=data.get("duration_ms"),
-                        tokens_in=data.get("tokens_in") or data.get("input_tokens"),
-                        tokens_out=data.get("tokens_out") or data.get("output_tokens"),
-                        cached=data.get("cached"),
-                        model=data.get("model"),
-                    )
-                    continue
+            if ev_type == "stats":
+                yield StatsEvent(
+                    duration_ms=data.get("duration_ms"),
+                    tokens_in=data.get("tokens_in") or data.get("input_tokens"),
+                    tokens_out=data.get("tokens_out") or data.get("output_tokens"),
+                    cached=data.get("cached"),
+                    model=data.get("model"),
+                )
+                continue
 
-                if ev_type in ("done", "stop"):
-                    ev = _flush_text()
-                    if ev:
-                        yield ev
-                    if data.get("session_id"):
-                        self._session_id = data["session_id"]
-                    yield DoneEvent(session_id=self._session_id)
-                    continue
-            except ValidationError:
-                pass
+            if ev_type in ("done", "stop"):
+                ev = _flush_text()
+                if ev:
+                    yield ev
+                if data.get("session_id"):
+                    self._session_id = data["session_id"]
+                yield DoneEvent(session_id=self._session_id)
+                continue
 
         # EOF without explicit done: flush any pending assistant text.
         ev = _flush_text()

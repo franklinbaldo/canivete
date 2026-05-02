@@ -78,36 +78,30 @@ class ClaudeCodeBackend:
             if not line:
                 continue
 
-            try:
-                data = json.loads(line)
-            except ValueError:
-                continue
+            data = json.loads(line)
 
             kind = data.get("type") or data.get("kind")
 
-            try:
-                if kind in ("text", "message_start", "content_block_delta"):
-                    text = data.get("text") or data.get("delta", {}).get("text")
-                    if text:
-                        yield TextEvent(text=text)
-                elif kind == "tool_use":
-                    yield ToolCallEvent(
-                        tool=data.get("name", "tool"),
-                        args=data.get("input", {}),
-                        call_id=data.get("id"),
-                    )
-                elif kind == "tool_result":
-                    yield ToolResultEvent(
-                        call_id=data.get("tool_use_id"),
-                        ok=not data.get("is_error", False),
-                        output=data.get("content", ""),
-                    )
-                elif kind == "error":
-                    yield ErrorEvent(message=data.get("error", {}).get("message", "Unknown error"))
-                elif kind in ("message_stop", "done"):
-                    yield DoneEvent(session_id=self._session_id)
-            except ValidationError:
-                pass
+            if kind in ("text", "message_start", "content_block_delta"):
+                text = data.get("text") or data.get("delta", {}).get("text")
+                if text:
+                    yield TextEvent(text=text)
+            elif kind == "tool_use":
+                yield ToolCallEvent(
+                    tool=data.get("name", "tool"),
+                    args=data.get("input", {}),
+                    call_id=data.get("id"),
+                )
+            elif kind == "tool_result":
+                yield ToolResultEvent(
+                    call_id=data.get("tool_use_id"),
+                    ok=not data.get("is_error", False),
+                    output=data.get("content", ""),
+                )
+            elif kind == "error":
+                yield ErrorEvent(message=data.get("error", {}).get("message", "Unknown error"))
+            elif kind in ("message_stop", "done"):
+                yield DoneEvent(session_id=self._session_id)
 
         self.proc.wait()
 

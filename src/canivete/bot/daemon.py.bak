@@ -8,35 +8,23 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from threading import Thread
-import logging
 
 from rich.console import Console
 
-from canivete.bot.backends import REGISTRY, normalize_backend_name
+from canivete.bot.backends import REGISTRY
 from canivete.bot.backends.base import Backend, SpawnResult
 from canivete.bot.callback import handle_callback_query
 from canivete.bot.commands import handle_dynamic_command
 from canivete.bot.fatal import FATAL_PATTERNS, SUGGESTIONS
-from canivete.bot.media import (
-    download_telegram_file,
-    is_audio_document,
-    mime_to_ext,
-    persist_to_inbound,
-    transcribe_audio,
-)
 from canivete.bot.render import render_event
 from canivete.tg import _api_url
 
 err_console = Console(stderr=True)
 console = Console()
-log = logging.getLogger("canivete.bot")
 
 _BASE_CMDS = [
     {"command": "cancel", "description": "aborta a execução atual"},
     {"command": "status", "description": "ocioso"},  # será sobrescrito
-    {"command": "backend", "description": "mostra ou troca o harness ativo"},
-    {"command": "spawn", "description": "troca de harness e injeta um prompt"},
-    {"command": "harness", "description": "atalho para /backend"},
     {"command": "reload", "description": "reinicia o daemon (hot-reload)"},
     {"command": "update", "description": "atualiza o canivete e reinicia"},
     {"command": "cron", "description": "lista jobs agendados"},
@@ -45,6 +33,8 @@ _BASE_CMDS = [
 ]
 
 # Live state global do bot daemon.
+# Como o bot daemon do canivete é assíncrono e pode lidar com múltiplos chats,
+# o status do menu slash reflete a soma global ou o estado do worker mais ativo.
 _live_status = {
     "phase": "ocioso",
     "started_at": None,
@@ -59,33 +49,20 @@ _live_status = {
 _live_status_lock = asyncio.Lock()
 _status_desc_cache = [None]
 
-# Ícones para ferramentas no status do menu slash.
-TOOL_ICONS = {
-    "run_shell_command": "💻", "Bash": "💻",
-    "read_file": "📖", "Read": "📖",
-    "write_file": "✏️", "Write": "✏️", "replace": "✏️", "Edit": "✏️",
-    "glob": "🔍", "Glob": "🔍",
-    "search_file_content": "🔍", "Grep": "🔍",
-    "google_web_search": "🌐", "WebSearch": "🌐",
-    "web_fetch": "🌐", "WebFetch": "🌐",
-}
-DEFAULT_ICON = "⚙️"
-
 
 def _short_tool(name: str, tool_input: dict | None = None) -> str:
-    '''Versão compacta do tool_use pra caber na descrição.'''
+    """Versão compacta do tool_use pra caber na descrição."""
     if not name:
         return ""
-    icon = TOOL_ICONS.get(name, DEFAULT_ICON)
     ti = tool_input or {}
     detail = ""
     if name in ("read_file", "write_file", "replace", "Read", "Write", "Edit"):
         path = (ti.get("file_path") or ti.get("path") or "").rsplit("/", 1)[-1]
-        detail = f"({path[:15]})" if path else ""
+        detail = f"({path[:20]})" if path else ""
     elif name in ("run_shell_command", "Bash"):
         cmd = (ti.get("command") or "").strip().split(" ", 1)[0]
-        detail = f"({cmd[:10]})" if cmd else ""
-    return f"{icon}{name}{detail}"
+        detail = f"({cmd[:15]})" if cmd else ""
+    return f"{name}{detail}"
 
 
 def compose_status_desc() -> str:
@@ -100,8 +77,6 @@ def compose_status_desc() -> str:
             bits.append(f"{s['tools_done']}/{s['tools_total']}🔧")
         if s["thoughts"]:
             bits.append(f"{s['thoughts']}💭")
-        if s["texts_sent"]:
-            bits.append(f"{s['texts_sent']}t")
     elif s["phase"] == "pronto":
         head = "✓ pronto"
         if s["last_done_s"] is not None:
@@ -143,114 +118,44 @@ async def _status_ticker_loop():
 
 
 _HEADER_RULE = "=" * 64
-_SHARED_CONTEXT_DIR = ".canivete"
-_SHARED_CONTEXT_FILE = "context.md"
 
 
-def _shared_context_path(workspace: Path) -> Path:
-    return workspace / _SHARED_CONTEXT_DIR / _SHARED_CONTEXT_FILE
-
-
-def _append_shared_context(
-    workspace: Path,
-    *,
-    chat_id: int,
-    backend_name: str,
-    role: str,
-    body: str,
-):
-    if not body.strip():
-        return
-
-    target = _shared_context_path(workspace)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    block = (
-        f"## {stamp} · chat {chat_id} · backend {backend_name} · {role}\n\n"
-        f"```text\n{body.strip()}\n```\n\n"
-    )
-    with target.open("a", encoding="utf-8") as fh:
-        fh.write(block)
-
-
-def build_system_prompt(agent_root: Path, workspace: Path | None = None) -> str:
-    '''Concatena os .md ALL-CAPS na raiz do agent_root num único string.'''
+def build_system_prompt(agent_root: Path) -> str:
+    """Concatena os .md ALL-CAPS na raiz do agent_root num único string."""
     if not agent_root.exists():
-        base = ""
-    else:
-        skip = {"CLAUDE.md", "GEMINI.md", "README.md", "SYSTEM.md"}
-        candidates = []
-        for f in agent_root.glob("*.md"):
-            if f.name in skip:
-                continue
-            if f.stem != f.stem.upper():
-                continue
-            candidates.append(f)
+        return ""
+    skip = {"CLAUDE.md", "GEMINI.md", "README.md", "SYSTEM.md"}
+    candidates = []
+    for f in agent_root.glob("*.md"):
+        if f.name in skip:
+            continue
+        if f.stem != f.stem.upper():
+            continue  # not ALL-CAPS — operational notes, not a manifest
+        candidates.append(f)
 
-        soul = next((f for f in candidates if f.name == "SOUL.md"), None)
-        rest = sorted((f for f in candidates if f is not soul), key=lambda p: p.name)
-        ordered = ([soul] if soul else []) + rest
+    soul = next((f for f in candidates if f.name == "SOUL.md"), None)
+    rest = sorted((f for f in candidates if f is not soul), key=lambda p: p.name)
+    ordered = ([soul] if soul else []) + rest
 
-        chunks = []
-        for f in ordered:
+    chunks = []
+    for f in ordered:
+        try:
             body = f.read_text(encoding="utf-8")
             chunks.append(f"{_HEADER_RULE}\nFILE: {f}\n{_HEADER_RULE}\n\n{body}\n")
-        base = "\n".join(chunks)
-
-    if not workspace:
-        return base
-
-    shared = _shared_context_path(workspace)
-    if not shared.exists():
-        return base
-
-    body = shared.read_text(encoding="utf-8")
-
-    if not body.strip():
-        return base
-
-    return "\n".join(
-        part
-        for part in (
-            base,
-            f"{_HEADER_RULE}\nFILE: {shared}\n{_HEADER_RULE}\n\n{body}\n",
-        )
-        if part
-    )
-
-
-def write_system_prompt(workspace: Path, content: str, backend_name: str):
-    '''Escreve o conteúdo concatenado no arquivo que o backend espera (GEMINI.md ou SYSTEM.md).'''
-    filename = "SYSTEM.md" if "claude" in backend_name else "GEMINI.md"
-    target = workspace / filename
-    workspace.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
-    console.print(f"[dim]Written context to {target} ({len(content)} chars)[/]")
-
-
-async def check_health():
-    '''Verificação de saúde básica: DNS e conectividade Telegram.'''
-    import socket
-    socket.gethostbyname("api.telegram.org")
-    return True, "Healthy"
-
-
-async def _health_guard_loop():
-    '''Monitora a saúde do sistema e tenta se auto-corrigir.'''
-    while True:
-        await asyncio.sleep(60)
-        ok, msg = await check_health()
-        if not ok:
-            err_console.print(f"[bold red]HEALTH ALERT:[/] {msg}")
-        else:
-            log.debug("Health check passed.")
+        except Exception:
+            continue
+    return "\n".join(chunks)
 
 
 def _post_json(url: str, payload: dict) -> dict | None:
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read())
+    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        err_console.print(f"[red]Telegram API Error:[/] {e}")
+        return None
 
 
 def _get_updates(offset: int) -> list[dict]:
@@ -274,61 +179,20 @@ def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> 
     return None
 
 
-def _audio_prompt(first_name: str, ts: str, path: Path, transcript: str | None) -> str:
-    if transcript:
-        return (
-            f"[Áudio de {first_name} via Telegram em {ts}, transcrito via Whisper. "
-            f"Original: {path}]\n\n{transcript}"
-        )
-    return (
-        f"[Áudio de {first_name} via Telegram em {ts}, salvo em {path}. "
-        "Whisper indisponível — não transcrito.]"
-    )
-
-
-def _message_text_from_media(msg: dict, first_name: str) -> str | None:
-    """Convert Telegram media updates into the text prompt expected by workers."""
-    chat_id = msg.get("chat", {}).get("id")
-    message_id = msg.get("message_id")
-    caption = msg.get("caption") or ""
-    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-    media = None
-    suffix = ".ogg"
-    if msg.get("voice"):
-        media = msg["voice"]
-        suffix = ".ogg"
-    elif msg.get("audio"):
-        media = msg["audio"]
-        suffix = mime_to_ext(media.get("mime_type"), ".mp3")
-    elif msg.get("document") and is_audio_document(msg["document"]):
-        media = msg["document"]
-        name = media.get("file_name") or ""
-        suffix = Path(name).suffix or mime_to_ext(media.get("mime_type"), ".bin")
-
-    if not media:
-        return caption or None
-
-    tmp = download_telegram_file(media["file_id"], suffix=suffix)
-    if not tmp:
-        return caption or "[Erro ao baixar áudio do Telegram]"
-
-    path = persist_to_inbound(tmp, suffix)
-    transcript = transcribe_audio(path)
-
-    if transcript and chat_id:
-        send_message(chat_id, f"🎤 {transcript}", reply_to=message_id)
-
-    prompt = _audio_prompt(first_name, ts, path, transcript)
-    return f"{caption}\n\n{prompt}".strip() if caption else prompt
-
-
 _last_edit_text: dict[tuple[int | str, int], str] = {}
 
 
 def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
+    # Telegram rejects empty text with HTTP 400. Skip the call entirely
+    # rather than spamming the API with edits that can never succeed.
     if not text:
         return
+    # Telegram also rejects edits where the new text equals the current
+    # text ("message is not modified"). The daemon edits on a 1s tick
+    # whenever ANY event arrives, so without this guard a stream that
+    # ends with several non-text events (tool_result → done) ends up
+    # repeating the same final edit. Track the last text we sent per
+    # message so we only call the API when something actually changed.
     key = (chat_id, message_id)
     if _last_edit_text.get(key) == text:
         return
@@ -341,13 +205,10 @@ def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
 class ChatWorker:
     def __init__(self, chat_id: int, backend_name: str):
         self.chat_id = chat_id
-        self.backend_name = normalize_backend_name(backend_name)
+        self.backend_name = backend_name
         self.backend: Backend | None = None
         self.session_id: str | None = None
-        self.last_session_id: str | None = None
         self.is_new_session: bool = True
-        self.backend_sessions: dict[str, str | None] = {self.backend_name: None}
-        self.pending_new_session: dict[str, bool] = {self.backend_name: False}
         self.buffer: list[str] = []
         self.is_running = False
 
@@ -356,44 +217,8 @@ class ChatWorker:
         self.start_time: float = 0
         self.timeout = int(os.environ.get("AGENT_TIMEOUT", "300"))
 
-    def _select_backend(self, backend_name: str) -> bool:
-        backend_name = normalize_backend_name(backend_name)
-        backend_cls = REGISTRY.get(backend_name)
-        if not backend_cls:
-            err_console.print(f"[red]Unknown backend:[/] {backend_name}")
-            return False
-
-        if backend_name == self.backend_name:
-            return True
-
-        self.last_session_id = self.session_id
-        if self.session_id is not None:
-            self.backend_sessions[self.backend_name] = self.session_id
-        self.backend_name = backend_name
-        self.backend_sessions.setdefault(self.backend_name, None)
-        self.pending_new_session.setdefault(self.backend_name, False)
-        if self.pending_new_session[self.backend_name]:
-            self.session_id = None
-            self.is_new_session = True
-        else:
-            self.session_id = self.backend_sessions[self.backend_name]
-            self.is_new_session = self.session_id is None
-        self.backend = None
-        return True
-
-    def _state_summary(self) -> str:
-        active = self.session_id or "none"
-        last = self.last_session_id or "none"
-        known = ", ".join(
-            f"{name}:{sid or '-'}" for name, sid in sorted(self.backend_sessions.items())
-        )
-        return f"backend={self.backend_name} · session={active} · last={last} · known={known}"
-
-    def spawn_backend(self, prompt: str, backend_name: str | None = None):
+    def spawn_backend(self, prompt: str):
         if self.is_running:
-            return
-
-        if backend_name and not self._select_backend(backend_name):
             return
 
         backend_cls = REGISTRY.get(self.backend_name)
@@ -401,7 +226,6 @@ class ChatWorker:
             err_console.print(f"[red]Unknown backend:[/] {self.backend_name}")
             return
 
-        console.print(f"[cyan]Spawning backend {self.backend_name} for chat {self.chat_id}...[/]")
         self.backend = backend_cls()
         self.is_running = True
         self.fatal_error_matched = None
@@ -409,16 +233,7 @@ class ChatWorker:
         self.start_time = time.monotonic()
 
         agent_root = Path(os.environ.get("AGENT_ROOT", "."))
-        workspace = Path(os.environ.get("WORKSPACE", "."))
-        _append_shared_context(
-            workspace,
-            chat_id=self.chat_id,
-            backend_name=self.backend_name,
-            role="user",
-            body=prompt,
-        )
-        system_prompt = build_system_prompt(agent_root, workspace)
-        write_system_prompt(workspace, system_prompt, self.backend_name)
+        system_prompt = build_system_prompt(agent_root)
 
         asyncio.create_task(
             update_live_status(
@@ -470,7 +285,7 @@ class ChatWorker:
 
     def _watch_timeout(self):
         while self.is_running:
-            if time.monotonic() - self.start_time > self.timeout:
+            if time.time() - self.start_time > self.timeout:
                 self.fatal_error_matched = ("timeout", "Subprocess hit AGENT_TIMEOUT.")
                 if self.backend:
                     self.backend.kill()
@@ -485,6 +300,7 @@ class ChatWorker:
 
         try:
             async for event in spawn_res.events:
+                # Atualiza status dinâmico baseado no tipo de evento
                 status_update = {}
                 if event.kind == "text":
                     async with _live_status_lock:
@@ -506,45 +322,62 @@ class ChatWorker:
                 rendered = render_event(event)
                 if rendered:
                     full_text += rendered + "\n"
+
                     now = time.time()
                     if now - last_edit_time > 1.0 and msg_id:
                         await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
                         last_edit_time = now
 
+        except Exception as e:
+            err_console.print(f"[red]Error consuming events:[/] {e}")
+            await update_live_status(phase="erro", error=str(e)[:50])
+
         finally:
             self.is_running = False
             duration = time.monotonic() - self.start_time
+            
             if spawn_res.session_id:
                 self.session_id = spawn_res.session_id
-            self.backend_sessions[self.backend_name] = self.session_id
-            self.pending_new_session[self.backend_name] = False
             self.is_new_session = False
+
             if msg_id:
                 await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
-            workspace = Path(os.environ.get("WORKSPACE", "."))
-            _append_shared_context(
-                workspace,
-                chat_id=self.chat_id,
-                backend_name=self.backend_name,
-                role="assistant",
-                body=full_text or "[no renderable output]",
-            )
+
+            # Atualiza para pronto se não houve erro fatal ou exceção
             async with _live_status_lock:
                 if _live_status["phase"] == "processando":
                     await update_live_status(phase="pronto", last_done_s=duration, current_tool=None)
+
             self._handle_fatal_exit()
 
     def _handle_fatal_exit(self):
         if self.fatal_error_matched:
             kind, summary = self.fatal_error_matched
             suggestion = SUGGESTIONS.get(kind, "")
+
             exit_code = "?"
             if hasattr(self.backend, "proc") and self.backend.proc.poll() is not None:
                 exit_code = self.backend.proc.poll()
+
             duration = int(time.monotonic() - self.start_time)
+
             stderr_str = "".join(list(self.stderr_buffer)[-10:])[-800:]
+
             asyncio.create_task(update_live_status(phase="erro", last_done_s=duration, error=kind))
-            msg = f"⚠️ *{summary}*\n\nexit code: {exit_code}\nduration: {duration}s\n\n── stderr ──\n```\n{stderr_str}\n```\n\n── try ──\n{suggestion}"
+
+            msg = f"""⚠️ *{summary}*
+
+exit code: {exit_code}
+duration: {duration}s
+
+── stderr (last lines) ──
+```
+{stderr_str}
+```
+
+── what to try ──
+{suggestion}
+"""
             asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
 
     def handle_text(self, text: str):
@@ -553,110 +386,53 @@ class ChatWorker:
                 self.backend.kill()
             asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, "Cancelled."))
             return
-        if text.startswith("/backend") or text.startswith("/harness"):
-            parts = text.split(maxsplit=1)
-            if len(parts) == 1:
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        send_message,
-                        self.chat_id,
-                        f"📦 {self._state_summary()}",
-                    )
-                )
-                return
-
-            backend_name = parts[1].strip()
-            if self._select_backend(backend_name):
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        send_message,
-                        self.chat_id,
-                        f"✅ Harness ativo: `{self.backend_name}`. Próxima mensagem já usa esse backend.",
-                    )
-                )
-            else:
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        send_message,
-                        self.chat_id,
-                        f"❌ Harness desconhecido: `{backend_name}`.",
-                    )
-                )
-            return
-        if text.startswith("/spawn") or text.startswith("/fork"):
-            parts = text.split(maxsplit=2)
-            if len(parts) < 2:
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        send_message,
-                        self.chat_id,
-                        "Uso: `/spawn <backend> [prompt]`",
-                    )
-                )
-                return
-            backend_name = parts[1].strip()
-            prompt = parts[2].strip() if len(parts) > 2 else ""
-            if not self._select_backend(backend_name):
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        send_message,
-                        self.chat_id,
-                        f"❌ Harness desconhecido: `{backend_name}`.",
-                    )
-                )
-                return
-            if not prompt:
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        send_message,
-                        self.chat_id,
-                        f"✅ Spawn preparado em `{self.backend_name}`. Envie o próximo prompt ou use `/spawn {self.backend_name} ...`.",
-                    )
-                )
-                return
-            self.spawn_backend(prompt)
-            return
         if text in ("/new", "/reset"):
-            self.last_session_id = self.session_id
+            old_id = self.session_id
             self.session_id = None
             self.is_new_session = True
-            self.pending_new_session[self.backend_name] = True
-            asyncio.create_task(
-                asyncio.to_thread(
-                    send_message,
-                    self.chat_id,
-                    f"✨ Session reset. Anterior preservada: `{self.last_session_id or 'none'}`. Backend preservado: `{self.backend_name}`.",
-                )
+
+            msg = (
+                f"✨ Próxima mensagem abre sessão nova.\nAnterior preservada: `{old_id}`."
+                if old_id
+                else "✨ Próxima mensagem abre primeira sessão deste chat."
             )
+            asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
             return
         if text in ("/status", "/cron", "/config", "/reload", "/update"):
             if text == "/status":
                 desc = compose_status_desc()
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        send_message,
-                        self.chat_id,
-                        f"📊 *Status:* {desc}\n\n{self._state_summary()}",
-                    )
-                )
+                asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, f"📊 *Status:* {desc}"))
             elif text == "/reload":
                 asyncio.create_task(self._do_reload())
             elif text == "/update":
                 asyncio.create_task(self._do_update())
+            else:
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        send_message, self.chat_id, f"Command {text} not implemented in meta-harness yet."
+                    )
+                )
             return
+
         self.spawn_backend(text)
 
     async def _do_reload(self):
         await asyncio.to_thread(send_message, self.chat_id, "♻️ *Reloading daemon...*")
         await asyncio.sleep(1)
         import sys
+        # Substitui o processo atual pelo novo, preservando o container.
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     async def _do_update(self):
-        await asyncio.to_thread(send_message, self.chat_id, "⏳ *Updating canivete via uv...*")
-        cmd = "uv pip install --system --upgrade canivete"
-        proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        await asyncio.to_thread(send_message, self.chat_id, "⏳ *Updating canivete...*")
+        # Tenta atualizar via pip (o container usa uv pip install --system).
+        # Se estiver em modo editável ou git, o pip lidará corretamente.
+        cmd = "pip install --upgrade canivete"
+        proc = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
         stdout, stderr = await proc.communicate()
+        
         if proc.returncode == 0:
             await asyncio.to_thread(send_message, self.chat_id, "✅ *Update successful. Reloading...*")
             await asyncio.sleep(1)
@@ -664,7 +440,9 @@ class ChatWorker:
             os.execv(sys.executable, [sys.executable] + sys.argv)
         else:
             err = stderr.decode().strip() or stdout.decode().strip()
-            await asyncio.to_thread(send_message, self.chat_id, f"❌ *Update failed:*\n```\n{err[:500]}\n```")
+            await asyncio.to_thread(
+                send_message, self.chat_id, f"❌ *Update failed:*\n```\n{err[:500]}\n```"
+            )
 
 
 class Daemon:
@@ -680,25 +458,28 @@ class Daemon:
     async def run(self):
         offset = 0
         console.print(f"[green]Daemon started[/] with backend: [bold]{self.backend_name}[/]")
-        
+
         # Registra comandos e inicia ticker
         await update_live_status()
         asyncio.create_task(_status_ticker_loop())
-        asyncio.create_task(_health_guard_loop())
 
         while True:
             updates = await asyncio.to_thread(_get_updates, offset)
             for update in updates:
                 offset = update["update_id"] + 1
+
                 if "message" in update:
                     msg = update["message"]
                     chat_id = msg.get("chat", {}).get("id")
+                    text = msg.get("text")
                     first_name = msg.get("from", {}).get("first_name", "User")
-                    text = msg.get("text") or _message_text_from_media(msg, first_name)
                     if chat_id and text:
-                        console.print(f"[blue]Received message from {first_name} ({chat_id}):[/] {text[:50]}")
                         pseudo_msg = handle_dynamic_command(text, first_name)
-                        self.get_worker(chat_id).handle_text(pseudo_msg or text)
+                        if pseudo_msg:
+                            self.get_worker(chat_id).handle_text(pseudo_msg)
+                        else:
+                            self.get_worker(chat_id).handle_text(text)
+
                 elif "callback_query" in update:
                     cb = update["callback_query"]
                     chat_id = cb.get("message", {}).get("chat", {}).get("id")

@@ -43,6 +43,9 @@ def bot(
         or os.environ.get("AGENT_BACKEND")
         or "gemini-cli"
     )
+    from canivete.bot.backends import normalize_backend_name
+
+    backend_name = normalize_backend_name(backend_name)
     
     # Configura env vars se passadas via CLI para que o daemon as use
     if agent_root:

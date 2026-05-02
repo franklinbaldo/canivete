@@ -102,10 +102,7 @@ def _replay() -> dict:
     if not LOG.exists():
         return state
     for line in LOG.read_text().splitlines():
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+        ev = json.loads(line)
         action = ev.get("action")
         jid = ev.get("id")
         if not jid:

@@ -24,14 +24,7 @@ app = typer.Typer(
 
 def _send_profile(method: str, fields: dict, files: dict | None = None) -> dict:
     url = _api_url(method)
-    try:
-        result = _post_multipart(url, fields, files) if files else _post_form(url, fields)
-    except urllib.error.HTTPError as e:
-        err_console.print(f"[red]HTTP {e.code}:[/] {e.read().decode(errors='replace')}")
-        raise typer.Exit(1) from e
-    except (urllib.error.URLError, OSError) as e:
-        err_console.print(f"[red]Network error:[/] {e}")
-        raise typer.Exit(1) from e
+    result = _post_multipart(url, fields, files) if files else _post_form(url, fields)
     if not result.get("ok"):
         err_console.print(f"[red]Telegram returned not-ok:[/] {result}")
         raise typer.Exit(1)

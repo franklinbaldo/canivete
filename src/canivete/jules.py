@@ -56,22 +56,9 @@ class JulesClient:
             data = json.dumps(body).encode("utf-8")
 
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=30.0) as resp:
-                content = resp.read()
-                return json.loads(content) if content else {}
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode(errors="replace")
-            try:
-                err_data = json.loads(err_body)
-                msg = err_data.get("error", {}).get("message", str(e))
-                err_console.print(f"[red]Jules API Error ({e.code}):[/red] {msg}")
-            except Exception:  # noqa: BLE001  # noqa: BLE001
-                err_console.print(f"[red]Jules API Error ({e.code}):[/red] {err_body}")
-            raise typer.Exit(1) from e
-        except urllib.error.URLError as e:
-            err_console.print(f"[red]Network Error:[/red] {e}")
-            raise typer.Exit(1) from e
+        with urllib.request.urlopen(req, timeout=30.0) as resp:
+            content = resp.read()
+            return json.loads(content) if content else {}
 
     def __enter__(self) -> Self:
         return self
@@ -207,11 +194,7 @@ def new_session(
 
     final_prompt = prompt
     if prompt_file:
-        try:
-            final_prompt = pathlib.Path(prompt_file).read_text(encoding="utf-8")
-        except Exception as e:
-            err_console.print(f"[red]Error reading prompt file:[/red] {e}")
-            raise typer.Exit(1) from e
+        final_prompt = pathlib.Path(prompt_file).read_text(encoding="utf-8")
 
     resolved_source = _resolve_source_name(source) if source else None
 

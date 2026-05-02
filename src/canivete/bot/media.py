@@ -41,21 +41,18 @@ def is_audio_document(document: dict) -> bool:
 
 def download_telegram_file(file_id: str, suffix: str = ".bin") -> Path | None:
     req = urllib.request.Request(_api_url("getFile"), data=json.dumps({"file_id": file_id}).encode(), headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            info = json.loads(resp.read())
-        if not info.get("ok"):
-            return None
-        file_path = info["result"]["file_path"]
-        local_path = Path(os.environ.get("WORKSPACE", ".")) / "tmp" / "canivete-bot" / f"{uuid.uuid4().hex[:12]}{suffix}"
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        urllib.request.urlretrieve(
-            f"https://api.telegram.org/file/bot{_token()}/{file_path}",
-            local_path,
-        )
-        return local_path
-    except Exception:
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        info = json.loads(resp.read())
+    if not info.get("ok"):
         return None
+    file_path = info["result"]["file_path"]
+    local_path = Path(os.environ.get("WORKSPACE", ".")) / "tmp" / "canivete-bot" / f"{uuid.uuid4().hex[:12]}{suffix}"
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    urllib.request.urlretrieve(
+        f"https://api.telegram.org/file/bot{_token()}/{file_path}",
+        local_path,
+    )
+    return local_path
 
 
 def persist_to_inbound(tmp_path: Path, suffix: str) -> Path:
