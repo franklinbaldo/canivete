@@ -25,6 +25,7 @@ from canivete.bot.media import (
     persist_to_inbound,
     transcribe_audio,
 )
+from canivete.bot.render import render_event
 from canivete.tg import _api_url
 
 err_console = Console(stderr=True)
@@ -273,7 +274,7 @@ def _get_updates_fast(offset: int) -> list[dict]:
 
 def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> int | None:
     url = _api_url("sendMessage")
-    payload = {"chat_id": chat_id, "text": text}
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     if reply_to:
         payload["reply_to_message_id"] = reply_to
 
@@ -344,7 +345,12 @@ def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
         return
     _last_edit_text[key] = text
     url = _api_url("editMessageText")
-    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": "Markdown",
+    }
     _post_json(url, payload)
 
 
@@ -510,10 +516,14 @@ class ChatWorker:
 
         async def flush_buffer():
             nonlocal text_buffer, first_text, msg_id
-            chunk = text_buffer.strip()
+            raw_chunk = text_buffer.strip()
             text_buffer = ""
-            if not chunk:
+            if not raw_chunk:
                 return
+
+            import telegramify_markdown
+            chunk = telegramify_markdown.markdownify(raw_chunk)
+
             console.print(f"[dim]Flushing buffer ({len(chunk)} chars, mode={config.BOT_MODE})...[/]")
             if config.BOT_MODE == "burst":
                 reply = mid if first_text else None
@@ -543,35 +553,36 @@ class ChatWorker:
                         if "\n\n" in text_buffer:
                             await flush_buffer()
                     else:
+                        import telegramify_markdown
                         now = time.time()
                         if now - last_edit_time > 1.0 and msg_id:
-                            await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
+                            rendered = telegramify_markdown.markdownify(full_text)
+                            await asyncio.to_thread(edit_message, self.chat_id, msg_id, rendered)
                             last_edit_time = now
 
                     async with _live_status_lock:
                         _live_status["texts_sent"] += 1
 
-                elif event.kind == "tool_call":
-                    console.print(f"[dim]Received ToolCallEvent: {event.tool}[/]")
-                    await flush_buffer()
-                    status_update["current_tool"] = _short_tool(event.tool, event.args)
-                    async with _live_status_lock:
-                        _live_status["tools_total"] += 1
-                    if config.BOT_MODE == "burst":
-                        await asyncio.to_thread(send_message, self.chat_id, f"🔧 `{event.tool}`")
+                elif event.kind in ("tool_call", "tool_result", "thought", "error", "stats"):
+                    console.print(f"[dim]Received Event: {event.kind}[/]")
+                    if event.kind == "tool_call":
+                        await flush_buffer()
+                        status_update["current_tool"] = _short_tool(event.tool, event.args)
+                        async with _live_status_lock:
+                            _live_status["tools_total"] += 1
+                    elif event.kind == "tool_result":
+                        async with _live_status_lock:
+                            _live_status["tools_done"] += 1
+                    elif event.kind == "thought":
+                        async with _live_status_lock:
+                            _live_status["thoughts"] += 1
 
-                elif event.kind == "tool_result":
-                    console.print(f"[dim]Received ToolResultEvent: {event.call_id} (ok={event.ok})[/]")
-                    async with _live_status_lock:
-                        _live_status["tools_done"] += 1
+                    rendered = render_event(event)
+                    if rendered and config.BOT_MODE == "burst":
+                        await asyncio.to_thread(send_message, self.chat_id, rendered)
 
-                elif event.kind == "thought":
-                    console.print(f"[dim]Received ThoughtEvent[/]")
-                    async with _live_status_lock:
-                        _live_status["thoughts"] += 1
-
-                if status_update or event.kind in ("text", "tool_call", "tool_result", "thought"):
-                    await update_live_status(**status_update)
+                    if status_update or event.kind in ("tool_call", "tool_result", "thought"):
+                        await update_live_status(**status_update)
 
             console.print("[dim]Async for events loop finished. Final flush...[/]")
             await flush_buffer()
