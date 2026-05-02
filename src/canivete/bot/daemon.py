@@ -445,6 +445,8 @@ class ChatWorker:
             log.exception("Fatal error in worker task")
             console.print(f"[bold red]Fatal error in worker task:[/] {e}")
             await asyncio.to_thread(send_message, self.chat_id, f"❌ Internal Error: {e}")
+        finally:
+            self.is_running = False
 
     async def _run_with_fallbacks_inner(self, prompt: str, backend_cls: type[Backend], mid: int | None = None):
         tried = set()
@@ -616,7 +618,6 @@ class ChatWorker:
             console.print(f"[red]Error in _consume_events loop: {e}[/]")
             await asyncio.to_thread(send_message, self.chat_id, f"❌ Internal Error: {e}")
         finally:
-            self.is_running = False
             duration = time.monotonic() - self.start_time
             if spawn_res.session_id:
                 self.session_id = spawn_res.session_id
