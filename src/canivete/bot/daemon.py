@@ -69,7 +69,7 @@ def _post_json(url: str, payload: dict) -> dict | None:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return json.loads(resp.read())
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
-        err_console.print(f"[red]Telegram API Error:[/] {e}")
+        err_console.print(f"[red]Telegram API Error (PID {os.getpid()}):[/] {e} URL: {url} Payload: {payload}")
         return None
 
 
