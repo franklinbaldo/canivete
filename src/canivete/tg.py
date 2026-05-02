@@ -199,7 +199,7 @@ app.command("audio", help="Send an audio file (.mp3/.m4a/…) — not voice.")(
 
 
 @app.command("buttons", help="Send a message with an inline keyboard.")
-def send_buttons(  # noqa: C901, PLR0912, PLR0915
+def send_buttons(  # noqa: C901, PLR0912
     text: str | None = typer.Argument(None, help="Message text."),
     row: list[str] | None = typer.Option(
         None,

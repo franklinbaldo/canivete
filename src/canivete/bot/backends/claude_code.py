@@ -5,7 +5,6 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import uuid_utils
-from pydantic import ValidationError
 
 from canivete.bot.backends.base import (
     BackendEvent,

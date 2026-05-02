@@ -267,7 +267,7 @@ def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> 
     if reply_to:
         payload["reply_to_message_id"] = reply_to
 
-    log.info("Sending message to %s (reply_to=%s): %s", chat_id, reply_to, text[:50])
+    console.print(f"[dim]Sending message to {chat_id} (reply_to={reply_to}): {text[:50]}[/]")
     res = _post_json(url, payload)
     if res and res.get("ok"):
         return res["result"]["message_id"]
@@ -486,7 +486,8 @@ class ChatWorker:
                         self.backend.kill()
                     return
 
-    async def _consume_events(self, spawn_res: SpawnResult, mid: int | None = None):
+    async def _consume_events(self, spawn_res: SpawnResult, mid: int | None = None):  # noqa: PLR0915
+        console.print(f"[bold yellow]CONSUMING EVENTS FOR CHAT {self.chat_id}...[/]")
         # Initial message
         msg_id = None
         if config.BOT_MODE == "streaming":
@@ -503,6 +504,7 @@ class ChatWorker:
             text_buffer = ""
             if not chunk:
                 return
+            console.print(f"[dim]Flushing buffer ({len(chunk)} chars, mode={config.BOT_MODE})...[/]")
             if config.BOT_MODE == "burst":
                 reply = mid if first_text else None
                 msg_id = await asyncio.to_thread(send_message, self.chat_id, chunk, reply_to=reply)
@@ -512,6 +514,7 @@ class ChatWorker:
                 pass
 
         try:
+            console.print("[dim]Starting to consume events...[/]")
             deadline = self.start_time + self.timeout
             async for event in spawn_res.events:
                 if time.monotonic() > deadline:
@@ -522,6 +525,7 @@ class ChatWorker:
 
                 status_update = {}
                 if event.kind == "text":
+                    console.print(f"[dim]Received TextEvent: {len(event.text)} chars[/]")
                     if config.BOT_MODE == "burst":
                         text_buffer += event.text
                         # Flush on double newline for responsiveness
@@ -538,6 +542,7 @@ class ChatWorker:
                         _live_status["texts_sent"] += 1
 
                 elif event.kind == "tool_call":
+                    console.print(f"[dim]Received ToolCallEvent: {event.tool}[/]")
                     await flush_buffer()
                     status_update["current_tool"] = _short_tool(event.tool, event.args)
                     async with _live_status_lock:
@@ -546,19 +551,23 @@ class ChatWorker:
                         await asyncio.to_thread(send_message, self.chat_id, f"🔧 `{event.tool}`")
 
                 elif event.kind == "tool_result":
+                    console.print(f"[dim]Received ToolResultEvent: {event.call_id} (ok={event.ok})[/]")
                     async with _live_status_lock:
                         _live_status["tools_done"] += 1
 
                 elif event.kind == "thought":
+                    console.print(f"[dim]Received ThoughtEvent[/]")
                     async with _live_status_lock:
                         _live_status["thoughts"] += 1
 
                 if status_update or event.kind in ("text", "tool_call", "tool_result", "thought"):
                     await update_live_status(**status_update)
 
+            console.print("[dim]Async for events loop finished. Final flush...[/]")
             await flush_buffer()
         except Exception as e:
             log.exception("Error in _consume_events loop")
+            console.print(f"[red]Error in _consume_events loop: {e}[/]")
             await asyncio.to_thread(send_message, self.chat_id, f"❌ Internal Error: {e}")
         finally:
             self.is_running = False
@@ -573,12 +582,14 @@ class ChatWorker:
                 await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text or "🏁 Done.")
 
             workspace = Path(config.WORKSPACE)
+            # In burst mode, 'full_text' is empty. We use a combination or the last chunk.
+            body_to_save = full_text or text_buffer or "[no renderable output]"
             _append_shared_context(
                 workspace,
                 chat_id=self.chat_id,
                 backend_name=self.backend_name,
                 role="assistant",
-                body=full_text or text_buffer or "[no renderable output]",
+                body=body_to_save,
             )
             async with _live_status_lock:
                 if _live_status["phase"] == "processando":
@@ -701,7 +712,7 @@ class ChatWorker:
         await asyncio.to_thread(send_message, self.chat_id, "♻️ *Reloading daemon...*")
         await asyncio.sleep(1)
         import sys
-        os.execv(sys.executable, [sys.executable, *sys.argv])
+        os.execv(sys.executable, [sys.executable, *sys.argv])  # noqa: S606
 
     async def _do_update(self):
         await asyncio.to_thread(send_message, self.chat_id, "⏳ *Updating canivete via uv...*")
@@ -712,7 +723,7 @@ class ChatWorker:
             await asyncio.to_thread(send_message, self.chat_id, "✅ *Update successful. Reloading...*")
             await asyncio.sleep(1)
             import sys
-            os.execv(sys.executable, [sys.executable, *sys.argv])
+            os.execv(sys.executable, [sys.executable, *sys.argv])  # noqa: S606
         else:
             err = stderr.decode().strip() or stdout.decode().strip()
             await asyncio.to_thread(send_message, self.chat_id, f"❌ *Update failed:*\n```\n{err[:500]}\n```")
@@ -738,6 +749,7 @@ class Daemon:
         asyncio.create_task(_health_guard_loop())
 
         while True:
+            log.info("Main loop tick (offset=%s)...", offset)
             updates = await asyncio.to_thread(_get_updates, offset)
             for update in updates:
                 offset = update["update_id"] + 1
@@ -771,6 +783,10 @@ class Daemon:
 
 
 def run_daemon(backend_name: str):
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     daemon = Daemon(backend_name)
     try:
         asyncio.run(daemon.run())

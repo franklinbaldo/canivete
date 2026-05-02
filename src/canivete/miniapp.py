@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 import tempfile
-import urllib.error
 from pathlib import Path
 
 import typer

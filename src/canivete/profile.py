@@ -6,7 +6,6 @@ and profile photo.
 
 from __future__ import annotations
 
-import urllib.error
 from pathlib import Path
 
 import typer
