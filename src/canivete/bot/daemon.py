@@ -261,6 +261,16 @@ def _get_updates(offset: int) -> list[dict]:
     return []
 
 
+def _get_updates_fast(offset: int) -> list[dict]:
+    url = _api_url("getUpdates")
+    res = _post_json(
+        url, {"offset": offset, "timeout": 0, "allowed_updates": ["message", "callback_query"]}
+    )
+    if res and res.get("ok"):
+        return res.get("result", [])
+    return []
+
+
 def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> int | None:
     url = _api_url("sendMessage")
     payload = {"chat_id": chat_id, "text": text}
@@ -391,6 +401,7 @@ class ChatWorker:
 
     def spawn_backend(self, prompt: str, backend_name: str | None = None, mid: int | None = None):
         if self.is_running:
+            console.print(f"[yellow]Ignored prompt for {self.chat_id}: worker already running.[/]")
             return
 
         if backend_name and not self._select_backend(backend_name):
@@ -404,7 +415,6 @@ class ChatWorker:
         console.print(f"[cyan]Spawning backend {self.backend_name} for chat {self.chat_id}...[/]")
 
         asyncio.create_task(self._run_with_fallbacks(prompt, backend_cls, mid=mid))
-
     async def _run_with_fallbacks(self, prompt: str, backend_cls: type[Backend], mid: int | None = None):
         tried = set()
 
@@ -526,13 +536,13 @@ class ChatWorker:
                 status_update = {}
                 if event.kind == "text":
                     console.print(f"[dim]Received TextEvent: {len(event.text)} chars[/]")
+                    full_text += event.text
                     if config.BOT_MODE == "burst":
                         text_buffer += event.text
                         # Flush on double newline for responsiveness
                         if "\n\n" in text_buffer:
                             await flush_buffer()
                     else:
-                        full_text += event.text
                         now = time.time()
                         if now - last_edit_time > 1.0 and msg_id:
                             await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
@@ -747,6 +757,13 @@ class Daemon:
         await update_live_status()
         asyncio.create_task(_status_ticker_loop())
         asyncio.create_task(_health_guard_loop())
+
+        # Drena updates antigos
+        log.info("Draining old updates...")
+        drained = await asyncio.to_thread(_get_updates_fast, 0)
+        if drained:
+            offset = drained[-1]["update_id"] + 1
+            log.info("Skipped %d old updates. New offset: %d", len(drained), offset)
 
         while True:
             log.info("Main loop tick (offset=%s)...", offset)
