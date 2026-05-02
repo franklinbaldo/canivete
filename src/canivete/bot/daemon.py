@@ -274,7 +274,7 @@ def _get_updates_fast(offset: int) -> list[dict]:
 
 def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> int | None:
     url = _api_url("sendMessage")
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2"}
     if reply_to:
         payload["reply_to_message_id"] = reply_to
 
@@ -358,7 +358,7 @@ def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
         "chat_id": chat_id,
         "message_id": message_id,
         "text": text,
-        "parse_mode": "Markdown",
+        "parse_mode": "MarkdownV2",
     }
     try:
         _post_json(url, payload)
