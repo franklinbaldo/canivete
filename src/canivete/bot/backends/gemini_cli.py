@@ -39,6 +39,7 @@ class GeminiCliBackend:
         *,
         session_id: str | None,
         attachments: list[Path],
+        model: str | None = None,
         system_prompt: str | None = None,
         is_new_session: bool = False,
     ) -> SpawnResult:
@@ -47,6 +48,9 @@ class GeminiCliBackend:
             gemini_md.write_text(system_prompt, encoding="utf-8")
 
         cmd = ["gemini"]
+        if model:
+            cmd.extend(["--model", model])
+
         res_id = session_id or "latest"
         if res_id:
             cmd.extend(["--resume", res_id])

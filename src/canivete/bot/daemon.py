@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from threading import Thread
 
 from rich.console import Console
 
@@ -54,15 +55,26 @@ _live_status = {
     "last_done_s": None,
     "error": None,
 }
-_live_status_lock = asyncio.RLock()
+_live_status_lock = asyncio.Lock()
 _status_desc_cache = [None]
+
+# Ícones para ferramentas no status do menu slash.
+TOOL_ICONS = {
+    "run_shell_command": "💻", "Bash": "💻",
+    "read_file": "📖", "Read": "📖",
+    "write_file": "✏️", "Write": "✏️", "replace": "✏️", "Edit": "✏️",
+    "glob": "🔍", "Glob": "🔍",
+    "search_file_content": "🔍", "Grep": "🔍",
+    "google_web_search": "🌐", "WebSearch": "🌐",
+    "web_fetch": "🌐", "WebFetch": "🌐",
+}
+DEFAULT_ICON = "⚙️"
 
 
 def _short_tool(name: str, tool_input: dict | None = None) -> str:
     '''Versão compacta do tool_use pra caber na descrição.'''
     if not name:
         return ""
-    from canivete.bot.daemon import DEFAULT_ICON, TOOL_ICONS
     icon = TOOL_ICONS.get(name, DEFAULT_ICON)
     ti = tool_input or {}
     detail = ""
@@ -376,7 +388,7 @@ class ChatWorker:
         )
         return f"backend={self.backend_name} · session={active} · last={last} · known={known}"
 
-    def spawn_backend(self, prompt: str, backend_name: str | None = None):
+    def spawn_backend(self, prompt: str, backend_name: str | None = None, mid: int | None = None):
         if self.is_running:
             return
 
@@ -390,9 +402,9 @@ class ChatWorker:
 
         console.print(f"[cyan]Spawning backend {self.backend_name} for chat {self.chat_id}...[/]")
         
-        asyncio.create_task(self._run_with_fallbacks(prompt, backend_cls))
+        asyncio.create_task(self._run_with_fallbacks(prompt, backend_cls, mid=mid))
 
-    async def _run_with_fallbacks(self, prompt: str, backend_cls: type[Backend]):
+    async def _run_with_fallbacks(self, prompt: str, backend_cls: type[Backend], mid: int | None = None):
         tried = set()
         started_at_total = time.monotonic()
         
@@ -450,7 +462,7 @@ class ChatWorker:
                 Thread(target=self._watch_stderr, args=(self.backend.proc.stderr,), daemon=True).start()
 
             # Timeout check handled within _consume_events for asyncio consistency
-            await self._consume_events(spawn_res)
+            await self._consume_events(spawn_res, mid=mid)
             
             # Check for 429 retry
             if self.fatal_error_matched and self.fatal_error_matched[0] == "429":
@@ -462,21 +474,22 @@ class ChatWorker:
             
             break # Success or non-retryable error
 
-    async def _watch_stderr(self, stderr_pipe):
+    def _watch_stderr(self, stderr_pipe):
         for line in iter(stderr_pipe.readline, ""):
             if not line: break
             self.stderr_buffer.append(line)
             for pattern, kind, summary in FATAL_PATTERNS:
                 if pattern.search(line):
                     self.fatal_error_matched = (kind, summary)
-                    if self.backend: self.backend.kill()
+                    if self.backend:
+                        self.backend.kill()
                     return
 
-    async def _consume_events(self, spawn_res: SpawnResult):
+    async def _consume_events(self, spawn_res: SpawnResult, mid: int | None = None):
         # Initial message
         msg_id = None
         if config.BOT_MODE == "streaming":
-            msg_id = await asyncio.to_thread(send_message, self.chat_id, "⏳ *Starting...*")
+            msg_id = await asyncio.to_thread(send_message, self.chat_id, "⏳ *Starting...*", reply_to=mid)
 
         full_text = ""
         last_edit_time = 0.0
@@ -489,11 +502,11 @@ class ChatWorker:
             text_buffer = ""
             if not chunk: return
             if config.BOT_MODE == "burst":
-                reply = self.chat_id if first_text else None # Simplified logic for now
-                msg_id = await asyncio.to_thread(send_message, self.chat_id, chunk)
+                reply = mid if first_text else None
+                msg_id = await asyncio.to_thread(send_message, self.chat_id, chunk, reply_to=reply)
                 first_text = False
             else:
-                # Streaming mode: edit msg_id
+                # Streaming mode: full_text logic is outside flush_buffer
                 pass
 
         try:
@@ -501,14 +514,15 @@ class ChatWorker:
             async for event in spawn_res.events:
                 if time.monotonic() > deadline:
                     self.fatal_error_matched = ("timeout", "Agent timed out.")
-                    if self.backend: self.backend.kill()
+                    if self.backend:
+                        self.backend.kill()
                     break
 
                 status_update = {}
                 if event.kind == "text":
                     if config.BOT_MODE == "burst":
-                        text_buffer += event.text + "\n"
-                        # Simple heuristic: flush on double newline
+                        text_buffer += event.text
+                        # Flush on double newline for responsiveness
                         if "\n\n" in text_buffer:
                             await flush_buffer()
                     else:
@@ -580,7 +594,7 @@ class ChatWorker:
             msg = f"⚠️ *{summary}*\n\nexit code: {exit_code}\nduration: {duration}s\n\n── stderr ──\n```\n{stderr_str}\n```\n\n── try ──\n{suggestion}"
             asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
 
-    def handle_text(self, text: str):
+    def handle_text(self, text: str, mid: int | None = None):
         if text in ("/cancel", "/kill", "/flush"):
             if self.backend:
                 self.backend.kill()
@@ -647,7 +661,7 @@ class ChatWorker:
                     )
                 )
                 return
-            self.spawn_backend(prompt)
+            self.spawn_backend(prompt, mid=mid)
             return
         if text in ("/new", "/reset"):
             self.last_session_id = self.session_id
@@ -677,7 +691,7 @@ class ChatWorker:
             elif text == "/update":
                 asyncio.create_task(self._do_update())
             return
-        self.spawn_backend(text)
+        self.spawn_backend(text, mid=mid)
 
     async def _do_reload(self):
         await asyncio.to_thread(send_message, self.chat_id, "♻️ *Reloading daemon...*")
@@ -734,18 +748,20 @@ class Daemon:
                             console.print(f"[red]Unauthorized user attempt:[/] {first_name} ({chat_id})")
                             continue
                         
+                        mid = msg.get("message_id")
                         console.print(f"[blue]Received message from {first_name} ({chat_id}):[/] {text[:50]}")
                         pseudo_msg = handle_dynamic_command(text, first_name)
-                        self.get_worker(chat_id).handle_text(pseudo_msg or text)
+                        self.get_worker(chat_id).handle_text(pseudo_msg or text, mid=mid)
                 elif "callback_query" in update:
                     cb = update["callback_query"]
                     chat_id = cb.get("message", {}).get("chat", {}).get("id")
                     if chat_id:
                         if config.ALLOWED_USERS and str(chat_id) not in config.ALLOWED_USERS:
                             continue
+                        mid = cb.get("message", {}).get("message_id")
                         pseudo_msg = await asyncio.to_thread(handle_callback_query, cb)
                         if pseudo_msg:
-                            self.get_worker(chat_id).handle_text(pseudo_msg)
+                            self.get_worker(chat_id).handle_text(pseudo_msg, mid=mid)
 
             await asyncio.sleep(0.5)
 

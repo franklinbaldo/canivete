@@ -34,6 +34,7 @@ class ClaudeCodeBackend:
         *,
         session_id: str | None,
         attachments: list[Path],
+        model: str | None = None,
         system_prompt: str | None = None,
         is_new_session: bool = False,
     ) -> SpawnResult:
@@ -46,6 +47,8 @@ class ClaudeCodeBackend:
             "--verbose",
             "--dangerously-skip-permissions",
         ]
+        if model:
+            cmd.extend(["--model", model])
         if system_prompt:
             cmd.extend(["--append-system-prompt", system_prompt])
         if session_id and is_new_session:
