@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import datetime
 import json
 import logging
 import os
@@ -279,7 +280,16 @@ def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> 
         payload["reply_to_message_id"] = reply_to
 
     console.print(f"[dim]Sending message to {chat_id} (reply_to={reply_to}): {text[:50]}[/]")
-    res = _post_json(url, payload)
+    try:
+        res = _post_json(url, payload)
+    except urllib.error.HTTPError as e:
+        if e.code == 400:
+            console.print(f"[yellow]Markdown failed, falling back to plain text for {chat_id}[/]")
+            payload.pop("parse_mode", None)
+            res = _post_json(url, payload)
+        else:
+            raise
+
     if res and res.get("ok"):
         return res["result"]["message_id"]
     return None
@@ -351,7 +361,14 @@ def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
         "text": text,
         "parse_mode": "Markdown",
     }
-    _post_json(url, payload)
+    try:
+        _post_json(url, payload)
+    except urllib.error.HTTPError as e:
+        if e.code == 400:
+            payload.pop("parse_mode", None)
+            _post_json(url, payload)
+        else:
+            raise
 
 
 class ChatWorker:
@@ -421,7 +438,16 @@ class ChatWorker:
         console.print(f"[cyan]Spawning backend {self.backend_name} for chat {self.chat_id}...[/]")
 
         asyncio.create_task(self._run_with_fallbacks(prompt, backend_cls, mid=mid))
+
     async def _run_with_fallbacks(self, prompt: str, backend_cls: type[Backend], mid: int | None = None):
+        try:
+            await self._run_with_fallbacks_inner(prompt, backend_cls, mid=mid)
+        except Exception as e:
+            log.exception("Fatal error in worker task")
+            console.print(f"[bold red]Fatal error in worker task:[/] {e}")
+            await asyncio.to_thread(send_message, self.chat_id, f"❌ Internal Error: {e}")
+
+    async def _run_with_fallbacks_inner(self, prompt: str, backend_cls: type[Backend], mid: int | None = None):
         tried = set()
 
         while True:
@@ -530,7 +556,7 @@ class ChatWorker:
                 msg_id = await asyncio.to_thread(send_message, self.chat_id, chunk, reply_to=reply)
                 first_text = False
             else:
-                # Streaming mode: full_text logic is outside flush_buffer
+                # Streaming mode: edit msg_id logic is handled in the event loop
                 pass
 
         try:
@@ -600,10 +626,12 @@ class ChatWorker:
             self.is_new_session = False
 
             if config.BOT_MODE == "streaming" and msg_id:
-                await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text or "🏁 Done.")
+                import telegramify_markdown
+                rendered = telegramify_markdown.markdownify(full_text or "🏁 Done.")
+                await asyncio.to_thread(edit_message, self.chat_id, msg_id, rendered)
 
             workspace = Path(config.WORKSPACE)
-            # In burst mode, 'full_text' is empty. We use a combination or the last chunk.
+            # In burst mode, 'full_text' is empty? No, we added full_text += event.text
             body_to_save = full_text or text_buffer or "[no renderable output]"
             _append_shared_context(
                 workspace,
