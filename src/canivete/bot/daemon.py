@@ -60,7 +60,13 @@ def _post_json(url: str, payload: dict) -> dict | None:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return json.loads(resp.read())
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
-        err_console.print(f"[red]Telegram API Error (PID {os.getpid()}):[/] {e}")
+        err_msg = str(e)
+        if isinstance(e, urllib.error.HTTPError):
+            try:
+                err_msg += f" - Response: {e.read().decode()}"
+            except Exception:
+                pass
+        err_console.print(f"[red]Telegram API Error (PID {os.getpid()}):[/] {err_msg}")
         return None
 
 
@@ -75,6 +81,15 @@ def _get_updates(offset: int) -> list[dict]:
 
 
 def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> int | None:
+    if len(text) > 4000:
+        last_id = None
+        for i in range(0, len(text), 4000):
+            chunk = text[i:i+4000]
+            last_id = _send_message_single(chat_id, chunk, reply_to)
+        return last_id
+    return _send_message_single(chat_id, text, reply_to)
+
+def _send_message_single(chat_id: int | str, text: str, reply_to: int | None = None) -> int | None:
     url = _api_url("sendMessage")
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2"}
     if reply_to:
@@ -83,6 +98,8 @@ def send_message(chat_id: int | str, text: str, reply_to: int | None = None) -> 
     if not res:
         payload.pop("parse_mode", None)
         res = _post_json(url, payload)
+        if not res:
+            err_console.print(f"[red]Failed to send message:[/]\n{text}")
     if res and res.get("ok"):
         return res["result"]["message_id"]
     return None
@@ -112,6 +129,8 @@ def _cache_last_edit(key: tuple[int | str, int], text: str):
 def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
     if not text:
         return
+    if len(text) > 4000:
+        text = text[:3990] + "\n...(trunc)"
     key = (chat_id, message_id)
     if _last_edit_text.get(key) == text:
         return
@@ -127,6 +146,8 @@ def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
         res = _post_json(url, payload)
         if res and res.get("ok"):
             _cache_last_edit(key, text)
+        else:
+            err_console.print(f"[red]Failed to edit message:[/]\n{text}")
 
 
 class ChatWorker:
@@ -266,7 +287,7 @@ class ChatWorker:
                 asyncio.to_thread(self._watch_stderr, self.backend.proc.stderr)
             )
 
-        self.watchdog_task = asyncio.create_task(self._watch_watchdog())
+        self.watchdog_task = asyncio.create_task(self._health_check_loop())
         await self._consume_events(spawn_res, origin_message_id)
 
     def _watch_stderr(self, stderr_pipe):
