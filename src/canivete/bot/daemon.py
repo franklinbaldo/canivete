@@ -302,6 +302,9 @@ class ChatWorker:
         try:
             async for event in spawn_res.events:
                 self.last_activity = time.time()
+                if event.kind == "done" and event.session_id:
+                    self.session_id = event.session_id
+                
                 rendered = render_event(event)
                 if rendered:
                     full_text += rendered + "\n"

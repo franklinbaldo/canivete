@@ -185,7 +185,7 @@ class GeminiCliBackend:
                     if data.get("session_id"):
                         self._session_id = data["session_id"]
                     yield DoneEvent(session_id=self._session_id)
-                    continue
+                    return  # Exit early since we got explicit done
             except ValidationError:
                 pass
 
@@ -193,6 +193,10 @@ class GeminiCliBackend:
         ev = _flush_text()
         if ev:
             yield ev
+
+        # Always yield a DoneEvent at the end if we haven't returned yet,
+        # to carry the session_id (which might have been set in 'init').
+        yield DoneEvent(session_id=self._session_id)
 
         self.proc.wait()
 
