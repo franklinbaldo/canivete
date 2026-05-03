@@ -67,6 +67,8 @@ class JulesBackend:
                         None, lambda: client.send_message(self._session_id, prompt)
                     )
 
+                yield TextEvent(text=f"🔗 **Jules Session:** https://jules.google.com/session/{self._session_id}")
+
                 last_state = None
                 seen_activities: set[str] = set()
                 last_heartbeat = time.time()
