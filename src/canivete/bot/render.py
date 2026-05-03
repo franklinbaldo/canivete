@@ -1,6 +1,10 @@
 import json
+from typing import Any
+
 import telegramify_markdown
+
 from canivete.bot.backends.base import BackendEvent
+
 
 def _render_text(event: Any) -> str:
     return telegramify_markdown.markdownify(event.text)
@@ -54,6 +58,3 @@ def render_event(event: BackendEvent) -> str:
     if renderer:
         return renderer(event)
     return ""
-
-# Need to import Any for the type hints in handlers
-from typing import Any
