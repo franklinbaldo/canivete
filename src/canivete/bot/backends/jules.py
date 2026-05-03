@@ -1,4 +1,5 @@
 import asyncio
+import time
 import urllib.error
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -68,6 +69,7 @@ class JulesBackend:
 
                 last_state = None
                 seen_activities: set[str] = set()
+                last_heartbeat = time.time()
 
                 while not self._killed:
                     if not self._session_id:
@@ -78,11 +80,19 @@ class JulesBackend:
                     )
                     state = session_data.get("state", "UNKNOWN")
 
+                    now = time.time()
                     if state != last_state:
                         yield ThoughtEvent(
                             subject="State Update", description=f"Jules state: {state}"
                         )
                         last_state = state
+                        last_heartbeat = now
+                    elif state in ("IN_PROGRESS", "RUNNING") and (now - last_heartbeat) > 30:
+                        # Yield keepalive to prevent Canivete from timing out due to inactivity
+                        yield ThoughtEvent(
+                            subject="Keepalive", description=f"Jules is still working... (state: {state})"
+                        )
+                        last_heartbeat = now
 
                     # Fetch activities to emulate text/tool streaming
                     try:

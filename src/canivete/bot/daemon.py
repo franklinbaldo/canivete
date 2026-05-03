@@ -279,14 +279,18 @@ class ChatWorker:
                     if self.backend: self.backend.kill()
                     return
 
-    async def _watch_watchdog(self):
+    async def _health_check_loop(self):
         """Monitor de travamento e timeout global."""
         while self.is_running:
             now = time.time()
             if now - self.start_time > config.AGENT_TIMEOUT:
-                self.fatal_error_matched = ("timeout", f"Execution exceeded {config.AGENT_TIMEOUT}s.")
-                if self.backend: self.backend.kill()
-                return
+                if now - self.last_activity < config.AGENT_INACTIVITY_TIMEOUT:
+                    # Give it more time if it's still active (e.g., Jules in progress)
+                    self.start_time = now
+                else:
+                    self.fatal_error_matched = ("timeout", f"Execution exceeded {config.AGENT_TIMEOUT}s.")
+                    if self.backend: self.backend.kill()
+                    return
             if now - self.last_activity > config.AGENT_INACTIVITY_TIMEOUT:
                 self.fatal_error_matched = ("stuck", f"No activity for {config.AGENT_INACTIVITY_TIMEOUT}s.")
                 if self.backend: self.backend.kill()
