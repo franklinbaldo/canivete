@@ -12,7 +12,7 @@ from typing import Any
 from rich.console import Console
 
 from canivete import cron
-from canivete.bot import media
+from canivete.bot import config, media
 from canivete.bot.backends import REGISTRY
 from canivete.bot.backends.base import Backend, SpawnResult
 from canivete.bot.callback import handle_callback_query
@@ -101,13 +101,12 @@ def set_message_reaction(chat_id: int | str, message_id: int, emoji: str | None)
 
 # Fix Memory Leak: Use OrderedDict with limit
 _last_edit_text: collections.OrderedDict[tuple[int | str, int], str] = collections.OrderedDict()
-_MAX_EDIT_CACHE = 1000
 
 def _cache_last_edit(key: tuple[int | str, int], text: str):
     if key in _last_edit_text:
         _last_edit_text.move_to_end(key)
     _last_edit_text[key] = text
-    if len(_last_edit_text) > _MAX_EDIT_CACHE:
+    if len(_last_edit_text) > config.MAX_EDIT_CACHE:
         _last_edit_text.popitem(last=False)
 
 def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
@@ -144,8 +143,6 @@ class ChatWorker:
         self.fatal_error_matched: tuple[str, str] | None = None
         self.start_time: float = 0
         self.last_activity: float = 0
-        self.timeout = int(os.environ.get("AGENT_TIMEOUT", "300"))
-        self.inactivity_timeout = int(os.environ.get("AGENT_INACTIVITY_TIMEOUT", "60"))
         
         self.watchdog_task: asyncio.Task | None = None
         self.stderr_task: asyncio.Task | None = None
@@ -286,18 +283,21 @@ class ChatWorker:
         """Monitor de travamento e timeout global."""
         while self.is_running:
             now = time.time()
-            if now - self.start_time > self.timeout:
-                self.fatal_error_matched = ("timeout", f"Execution exceeded {self.timeout}s.")
+            if now - self.start_time > config.AGENT_TIMEOUT:
+                self.fatal_error_matched = ("timeout", f"Execution exceeded {config.AGENT_TIMEOUT}s.")
                 if self.backend: self.backend.kill()
                 return
-            if now - self.last_activity > self.inactivity_timeout:
-                self.fatal_error_matched = ("stuck", f"No activity for {self.inactivity_timeout}s.")
+            if now - self.last_activity > config.AGENT_INACTIVITY_TIMEOUT:
+                self.fatal_error_matched = ("stuck", f"No activity for {config.AGENT_INACTIVITY_TIMEOUT}s.")
                 if self.backend: self.backend.kill()
                 return
             await asyncio.sleep(2)
 
     async def _consume_events(self, spawn_res: SpawnResult, origin_message_id: int | None = None):
-        msg_id = await asyncio.to_thread(send_message, self.chat_id, "⏳ *Starting...*")
+        msg_id = None
+        if config.BOT_MODE == "streaming":
+            msg_id = await asyncio.to_thread(send_message, self.chat_id, "⏳ *Starting...*")
+        
         full_text = ""
         last_edit_time = 0.0
         last_sent_text = ""
@@ -309,13 +309,26 @@ class ChatWorker:
                     self.session_id = event.session_id
                 
                 rendered = render_event(event)
-                if rendered:
+                if not rendered:
+                    continue
+
+                if config.BOT_MODE == "events":
+                    # Send each event as a fresh message
+                    await asyncio.to_thread(send_message, self.chat_id, rendered)
+                
+                elif config.BOT_MODE == "streaming":
                     full_text += rendered + "\n"
                     now = time.time()
-                    if now - last_edit_time > 1.2 and msg_id and full_text != last_sent_text:
+                    # Progressive edits for text events, but tool/thought/stats force edit
+                    is_structural = event.kind in ("tool_call", "tool_result", "thought", "stats")
+                    if (is_structural or (now - last_edit_time > 1.2)) and msg_id and full_text != last_sent_text:
                         await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
                         last_sent_text = full_text
                         last_edit_time = now
+                
+                else: # burst (default/fallback)
+                    full_text += rendered + "\n"
+                    
         except Exception as e:
             err_console.print(f"[red]Error consuming events:[/] {e}")
         finally:
@@ -326,10 +339,15 @@ class ChatWorker:
             if spawn_res.session_id: self.session_id = spawn_res.session_id
             self.is_new_session = False
 
-            if msg_id and full_text and full_text != last_sent_text:
-                await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
-            elif msg_id and not full_text and not self.fatal_error_matched:
-                await asyncio.to_thread(edit_message, self.chat_id, msg_id, "❌ Backend silent exit.")
+            if config.BOT_MODE == "streaming":
+                if msg_id and full_text and full_text != last_sent_text:
+                    await asyncio.to_thread(edit_message, self.chat_id, msg_id, full_text)
+            elif config.BOT_MODE == "burst":
+                if full_text:
+                    await asyncio.to_thread(send_message, self.chat_id, full_text)
+
+            if not full_text and not self.fatal_error_matched and config.BOT_MODE != "events":
+                await asyncio.to_thread(send_message, self.chat_id, "❌ Backend silent exit.")
 
             if origin_message_id:
                 emoji = "⚠️" if self.fatal_error_matched else "✅"
@@ -363,9 +381,6 @@ class Daemon:
         return self.workers[chat_id]
 
     def _reap_zombies(self):
-        # Only reap if we have children and use WNOHANG to not block.
-        # Avoid -1 to be safe against stealing exit codes if possible, 
-        # but for now we keep it simple since backends manage their own procs usually.
         try:
             while True:
                 pid, _ = os.waitpid(-1, os.WNOHANG)
@@ -391,6 +406,7 @@ class Daemon:
     async def run(self):
         offset = 0
         console.print(f"[green]Daemon started[/] with backend: [bold]{self.backend_name}[/]")
+        console.print(f"[dim]Mode: {config.BOT_MODE}[/]")
         
         # Start cron poller
         asyncio.create_task(self._poll_cron())
