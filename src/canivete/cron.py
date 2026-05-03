@@ -90,13 +90,7 @@ def _parse_at(spec: str) -> dt.datetime:
 # ─── Storage ─────────────────────────────────────────────────────────
 
 
-def _append(event: dict) -> None:
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
-
-
-def _replay() -> dict:
+def replay() -> dict:
     """Replay the JSONL log into a dict of {id: state}."""
     state: dict = {}
     if not LOG.exists():
@@ -120,6 +114,28 @@ def _replay() -> dict:
     return state
 
 
+def append_event(event: dict) -> None:
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with LOG.open("a") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def check_due_jobs() -> list[dict]:
+    """Return a list of jobs that are due and haven't been fired/removed yet."""
+    state = replay()
+    now = _now_iso()
+    due = []
+    for jid, job in state.items():
+        if not job["fired"] and not job["removed"]:
+            if job["at"] <= now:
+                due.append(job)
+    return due
+
+
+def mark_job_fired(job_id: str) -> None:
+    append_event({"action": "fired", "id": job_id, "at": _now_iso()})
+
+
 # ─── Commands ────────────────────────────────────────────────────────
 
 
@@ -134,9 +150,9 @@ def cron_add(
     if (at and in_) or not (at or in_):
         err_console.print("[red]Use --at OR --in (exactly one).[/]")
         raise typer.Exit(2)
-    when = _parse_at(at) if at else _parse_in(in_)
+    state = replay()
     jid = "j_" + uuid.uuid4().hex[:8]
-    _append(
+    append_event(
         {
             "action": "add",
             "id": jid,
@@ -150,7 +166,7 @@ def cron_add(
 
 @app.command("list", help="List pending jobs.")
 def cron_list():
-    state = _replay()
+    state = replay()
     pending = sorted(
         (j for j in state.values() if not j["fired"] and not j["removed"]),
         key=lambda j: j.get("at") or "",
@@ -174,12 +190,12 @@ def cron_list():
 def cron_rm(
     job_id: str = typer.Argument(..., help="Job ID (see `canivete cron list`)."),
 ):
-    state = _replay()
+    state = replay()
     if job_id not in state:
         err_console.print(f"[red]Unknown ID:[/] {job_id}")
         raise typer.Exit(1)
     if state[job_id]["removed"]:
         console.print(f"[dim]{job_id} was already removed.[/]")
         raise typer.Exit(0)
-    _append({"action": "remove", "id": job_id, "at": _now_iso()})
+    append_event({"action": "remove", "id": job_id, "at": _now_iso()})
     console.print(f"[green]✓[/] removed: [yellow]{job_id}[/]")

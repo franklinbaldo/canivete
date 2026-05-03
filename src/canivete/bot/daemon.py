@@ -7,10 +7,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from threading import Thread
+from typing import Any
 
 from rich.console import Console
 
+from canivete import cron
+from canivete.bot import media
 from canivete.bot.backends import REGISTRY
 from canivete.bot.backends.base import Backend, SpawnResult
 from canivete.bot.callback import handle_callback_query
@@ -43,8 +45,11 @@ def build_system_prompt(agent_root: Path) -> str:
 
     chunks = []
     for f in ordered:
-        body = f.read_text(encoding="utf-8")
-        chunks.append(f"{_HEADER_RULE}\nFILE: {f}\n{_HEADER_RULE}\n\n{body}\n")
+        try:
+            body = f.read_text(encoding="utf-8")
+            chunks.append(f"{_HEADER_RULE}\nFILE: {f}\n{_HEADER_RULE}\n\n{body}\n")
+        except Exception as e:
+            err_console.print(f"[red]Error reading manifest {f}:[/] {e}")
     return "\n".join(chunks)
 
 
@@ -60,7 +65,7 @@ def _post_json(url: str, payload: dict) -> dict | None:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return json.loads(resp.read())
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
-        err_console.print(f"[red]Telegram API Error (PID {os.getpid()}):[/] {e} URL: {url} Payload: {payload}")
+        err_console.print(f"[red]Telegram API Error (PID {os.getpid()}):[/] {e}")
         return None
 
 
@@ -99,8 +104,16 @@ def set_message_reaction(chat_id: int | str, message_id: int, emoji: str | None)
     _post_json(url, payload)
 
 
-_last_edit_text: dict[tuple[int | str, int], str] = {}
+# Fix Memory Leak: Use OrderedDict with limit
+_last_edit_text: collections.OrderedDict[tuple[int | str, int], str] = collections.OrderedDict()
+_MAX_EDIT_CACHE = 1000
 
+def _cache_last_edit(key: tuple[int | str, int], text: str):
+    if key in _last_edit_text:
+        _last_edit_text.move_to_end(key)
+    _last_edit_text[key] = text
+    if len(_last_edit_text) > _MAX_EDIT_CACHE:
+        _last_edit_text.popitem(last=False)
 
 def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
     if not text:
@@ -108,14 +121,18 @@ def edit_message(chat_id: int | str, message_id: int, text: str) -> None:
     key = (chat_id, message_id)
     if _last_edit_text.get(key) == text:
         return
-    _last_edit_text[key] = text
+    
     url = _api_url("editMessageText")
     payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "MarkdownV2"}
 
     res = _post_json(url, payload)
-    if not res:
+    if res and res.get("ok"):
+        _cache_last_edit(key, text)
+    elif not res:
         payload.pop("parse_mode", None)
-        _post_json(url, payload)
+        res = _post_json(url, payload)
+        if res and res.get("ok"):
+            _cache_last_edit(key, text)
 
 
 class ChatWorker:
@@ -134,6 +151,9 @@ class ChatWorker:
         self.last_activity: float = 0
         self.timeout = int(os.environ.get("AGENT_TIMEOUT", "300"))
         self.inactivity_timeout = int(os.environ.get("AGENT_INACTIVITY_TIMEOUT", "60"))
+        
+        self.watchdog_task: asyncio.Task | None = None
+        self.stderr_task: asyncio.Task | None = None
 
     def handle_text(self, text: str, origin_message_id: int | None = None):
         if text == "/cancel":
@@ -154,24 +174,69 @@ class ChatWorker:
             asyncio.create_task(asyncio.to_thread(send_message, self.chat_id, msg))
             return
 
-        if text in ("/status", "/cron", "/config"):
-            asyncio.create_task(
-                asyncio.to_thread(send_message, self.chat_id, "Command not implemented in meta-harness yet.")
-            )
-            return
-
         self.queue.append((text, origin_message_id))
         if not self.is_running:
             self.process_queue()
+
+    async def handle_message_dict(self, msg: dict):
+        """Processes a raw Telegram message dict, handling media and text."""
+        chat_id = msg.get("chat", {}).get("id")
+        message_id = msg.get("message_id")
+        first_name = msg.get("from", {}).get("first_name", "User")
+        
+        text = msg.get("text")
+        photo = msg.get("photo")
+        voice = msg.get("voice")
+        audio = msg.get("audio")
+        document = msg.get("document")
+
+        prompt = ""
+        if text:
+            pseudo = handle_dynamic_command(text, first_name)
+            prompt = pseudo or text
+        
+        attachment_info = []
+        
+        try:
+            if photo:
+                # Take highest res
+                file_id = photo[-1]["file_id"]
+                path = await asyncio.to_thread(media.download_telegram_file, file_id)
+                attachment_info.append(f"[Photo: {path.name}]")
+            
+            if voice or audio:
+                file_id = (voice or audio)["file_id"]
+                path = await asyncio.to_thread(media.download_telegram_file, file_id)
+                transcript = await asyncio.to_thread(media.transcribe_audio, path)
+                attachment_info.append(f"[Audio: {path.name} | Transcript: {transcript}]")
+            
+            if document:
+                file_id = document["file_id"]
+                path = await asyncio.to_thread(media.download_telegram_file, file_id)
+                attachment_info.append(f"[File: {path.name}]")
+        except Exception as e:
+            err_console.print(f"[red]Media error:[/] {e}")
+            attachment_info.append(f"[Media processing failed: {e}]")
+
+        if attachment_info:
+            final_prompt = "\n".join(attachment_info)
+            if prompt:
+                final_prompt += f"\n\nUser message: {prompt}"
+            prompt = final_prompt
+
+        if prompt:
+            if message_id:
+                await asyncio.to_thread(set_message_reaction, self.chat_id, message_id, "👀")
+            self.handle_text(prompt, origin_message_id=message_id)
 
     def process_queue(self):
         if self.is_running or not self.queue:
             return
 
         prompt, mid = self.queue.popleft()
-        self.spawn_backend(prompt, origin_message_id=mid)
+        asyncio.create_task(self.spawn_backend(prompt, origin_message_id=mid))
 
-    def spawn_backend(self, prompt: str, origin_message_id: int | None = None):
+    async def spawn_backend(self, prompt: str, origin_message_id: int | None = None):
         backend_cls = REGISTRY.get(self.backend_name)
         if not backend_cls:
             err_console.print(f"[red]Unknown backend:[/] {self.backend_name}")
@@ -187,7 +252,8 @@ class ChatWorker:
         if self.session_id is None:
             self.session_id = self.backend.generate_session_id()
 
-        spawn_res = self.backend.spawn(
+        spawn_res = await asyncio.to_thread(
+            self.backend.spawn,
             prompt=prompt,
             session_id=self.session_id,
             attachments=[],
@@ -196,10 +262,12 @@ class ChatWorker:
         )
 
         if hasattr(self.backend, "proc") and self.backend.proc.stderr:
-            Thread(target=self._watch_stderr, args=(self.backend.proc.stderr,), daemon=True).start()
+            self.stderr_task = asyncio.create_task(
+                asyncio.to_thread(self._watch_stderr, self.backend.proc.stderr)
+            )
 
-        Thread(target=self._watch_watchdog, daemon=True).start()
-        asyncio.create_task(self._consume_events(spawn_res, origin_message_id))
+        self.watchdog_task = asyncio.create_task(self._watch_watchdog())
+        await self._consume_events(spawn_res, origin_message_id)
 
     def _watch_stderr(self, stderr_pipe):
         for line in iter(stderr_pipe.readline, ""):
@@ -211,7 +279,7 @@ class ChatWorker:
                     if self.backend: self.backend.kill()
                     return
 
-    def _watch_watchdog(self):
+    async def _watch_watchdog(self):
         """Monitor de travamento e timeout global."""
         while self.is_running:
             now = time.time()
@@ -223,7 +291,7 @@ class ChatWorker:
                 self.fatal_error_matched = ("stuck", f"No activity for {self.inactivity_timeout}s.")
                 if self.backend: self.backend.kill()
                 return
-            time.sleep(2)
+            await asyncio.sleep(2)
 
     async def _consume_events(self, spawn_res: SpawnResult, origin_message_id: int | None = None):
         msg_id = await asyncio.to_thread(send_message, self.chat_id, "⏳ *Starting...*")
@@ -246,6 +314,9 @@ class ChatWorker:
             err_console.print(f"[red]Error consuming events:[/] {e}")
         finally:
             self.is_running = False
+            if self.watchdog_task: self.watchdog_task.cancel()
+            if self.stderr_task: self.stderr_task.cancel()
+            
             if spawn_res.session_id: self.session_id = spawn_res.session_id
             self.is_new_session = False
 
@@ -286,33 +357,55 @@ class Daemon:
         return self.workers[chat_id]
 
     def _reap_zombies(self):
+        # Only reap if we have children and use WNOHANG to not block.
+        # Avoid -1 to be safe against stealing exit codes if possible, 
+        # but for now we keep it simple since backends manage their own procs usually.
         try:
             while True:
                 pid, _ = os.waitpid(-1, os.WNOHANG)
                 if pid == 0: break
         except ChildProcessError: pass
 
+    async def _poll_cron(self):
+        """Background task to poll for due cron jobs."""
+        while True:
+            try:
+                due = await asyncio.to_thread(cron.check_due_jobs)
+                for job in due:
+                    chat_id = os.environ.get("CRON_CHAT_ID")
+                    if chat_id:
+                        console.print(f"[yellow]Firing cron job {job['id']} for {chat_id}[/]")
+                        worker = self.get_worker(int(chat_id))
+                        worker.handle_text(job["prompt"])
+                        await asyncio.to_thread(cron.mark_job_fired, job["id"])
+            except Exception as e:
+                err_console.print(f"[red]Cron poll error:[/] {e}")
+            await asyncio.sleep(10)
+
     async def run(self):
         offset = 0
         console.print(f"[green]Daemon started[/] with backend: [bold]{self.backend_name}[/]")
+        
+        # Start cron poller
+        asyncio.create_task(self._poll_cron())
+        
         while True:
             await asyncio.to_thread(self._reap_zombies)
             updates = await asyncio.to_thread(_get_updates, offset)
             for update in updates:
                 offset = update["update_id"] + 1
                 if "message" in update:
-                    msg = update["message"]; chat_id = msg.get("chat", {}).get("id")
-                    text = msg.get("text"); first_name = msg.get("from", {}).get("first_name", "User")
-                    message_id = msg.get("message_id")
-                    if chat_id and text:
-                        if message_id: await asyncio.to_thread(set_message_reaction, chat_id, message_id, "👀")
-                        pseudo = handle_dynamic_command(text, first_name)
-                        self.get_worker(chat_id).handle_text(pseudo or text, origin_message_id=message_id)
+                    msg = update["message"]
+                    chat_id = msg.get("chat", {}).get("id")
+                    if chat_id:
+                        asyncio.create_task(self.get_worker(chat_id).handle_message_dict(msg))
                 elif "callback_query" in update:
-                    cb = update["callback_query"]; chat_id = cb.get("message", {}).get("chat", {}).get("id")
+                    cb = update["callback_query"]
+                    chat_id = cb.get("message", {}).get("chat", {}).get("id")
                     if chat_id:
                         pseudo = await asyncio.to_thread(handle_callback_query, cb)
-                        if pseudo: self.get_worker(chat_id).handle_text(pseudo, origin_message_id=cb.get("message", {}).get("message_id"))
+                        if pseudo:
+                            self.get_worker(chat_id).handle_text(pseudo, origin_message_id=cb.get("message", {}).get("message_id"))
             await asyncio.sleep(0.5)
 
 def run_daemon(backend_name: str):
