@@ -53,11 +53,6 @@ def build_system_prompt(agent_root: Path) -> str:
     return "\n".join(chunks)
 
 
-SYSTEM_PROMPT = build_system_prompt(Path(os.environ.get("AGENT_ROOT", ".")))
-if not SYSTEM_PROMPT:
-    err_console.print("[yellow]Warning:[/] no manifests found in AGENT_ROOT")
-
-
 def _post_json(url: str, payload: dict) -> dict | None:
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
@@ -242,6 +237,14 @@ class ChatWorker:
             err_console.print(f"[red]Unknown backend:[/] {self.backend_name}")
             return
 
+        # Build dynamic system prompt from ALL-CAPS files
+        try:
+            agent_root = Path(os.environ.get("AGENT_ROOT", "."))
+            current_system_prompt = build_system_prompt(agent_root)
+        except Exception as e:
+            err_console.print(f"[red]Error building system prompt:[/] {e}")
+            current_system_prompt = ""
+
         self.backend = backend_cls()
         self.is_running = True
         self.fatal_error_matched = None
@@ -257,7 +260,7 @@ class ChatWorker:
             prompt=prompt,
             session_id=self.session_id,
             attachments=[],
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=current_system_prompt,
             is_new_session=self.is_new_session,
         )
 
