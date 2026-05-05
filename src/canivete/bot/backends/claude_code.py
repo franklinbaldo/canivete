@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -46,6 +47,12 @@ class ClaudeCodeBackend:
             "--verbose",
             "--dangerously-skip-permissions",
         ]
+        model = os.environ.get("CLAUDE_CODE_MODEL")
+        if model:
+            cmd.extend(["--model", model])
+        effort = os.environ.get("CLAUDE_CODE_EFFORT")
+        if effort:
+            cmd.extend(["--effort", effort])
         if system_prompt:
             cmd.extend(["--append-system-prompt", system_prompt])
         if session_id and is_new_session:
