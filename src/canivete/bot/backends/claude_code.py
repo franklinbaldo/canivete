@@ -93,26 +93,35 @@ class ClaudeCodeBackend:
             kind = data.get("type") or data.get("kind")
 
             try:
-                if kind in ("text", "message_start", "content_block_delta"):
-                    text = data.get("text") or data.get("delta", {}).get("text")
-                    if text:
-                        yield TextEvent(text=text)
-                elif kind == "tool_use":
-                    yield ToolCallEvent(
-                        tool=data.get("name", "tool"),
-                        args=data.get("input", {}),
-                        call_id=data.get("id"),
-                    )
-                elif kind == "tool_result":
-                    yield ToolResultEvent(
-                        call_id=data.get("tool_use_id"),
-                        ok=not data.get("is_error", False),
-                        output=data.get("content", ""),
-                    )
-                elif kind == "error":
-                    yield ErrorEvent(message=data.get("error", {}).get("message", "Unknown error"))
-                elif kind in ("message_stop", "done"):
-                    yield DoneEvent(session_id=self._session_id)
+                if kind == "assistant":
+                    blocks = (data.get("message") or {}).get("content") or []
+                    for block in blocks:
+                        btype = block.get("type")
+                        if btype == "text":
+                            text = block.get("text")
+                            if text:
+                                yield TextEvent(text=text)
+                        elif btype == "tool_use":
+                            yield ToolCallEvent(
+                                tool=block.get("name", "tool"),
+                                args=block.get("input", {}),
+                                call_id=block.get("id"),
+                            )
+                elif kind == "user":
+                    blocks = (data.get("message") or {}).get("content") or []
+                    for block in blocks:
+                        if block.get("type") == "tool_result":
+                            yield ToolResultEvent(
+                                call_id=block.get("tool_use_id"),
+                                ok=not block.get("is_error", False),
+                                output=block.get("content", ""),
+                            )
+                elif kind == "result":
+                    sid = data.get("session_id") or self._session_id
+                    self._session_id = sid
+                    if data.get("is_error"):
+                        yield ErrorEvent(message=str(data.get("result") or "Unknown error"))
+                    yield DoneEvent(session_id=sid)
             except ValidationError:
                 pass
 
